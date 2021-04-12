@@ -1,0 +1,556 @@
+---
+title: "Introduction to ALAAM"
+output: html_document
+bibliography: ALAAMreferences.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Autologistic actor-attribute model
+The social influence model developed by @robins2001network and later elaborated by @daraganovaThesis and @daraganova2013autologistic and now refered to as the autologistic actor-attribute model (ALAAM), is a model for binary nodal attributes $Y= \{Y_i:1 \leq i \leq n \}$, conditional on a network adjacency matrix $X = \{ X_{ij}: (i,j)\in V \times V  \}$.
+
+$$p_{\theta}(y | x ) = \exp \left\{ \theta^{\top} z(y,x) - \psi(\theta; x) \right\}{\text{.}}$$ 
+Here $z(y,x )$ is a $p\times 1$ vector of statistics calculated for the the dependent variable $y$ and the network $x$.
+
+This is a tutorial that takes you through the Bayesian inference scheme of @koskinen2020bayesian. To save time in execution, the *number of iterations* in the estimations, ``r 'Iterations'``, is deliberately set too low.
+
+## Target of inference
+
+The aim of the MCMC of @koskinen2020bayesian, is to draw samples from and thereby approximate the posterior distribution
+$$\pi(\theta | y,x) \propto p_{\theta}(y | x ) \pi(\theta) = \exp \left\{ \theta^{\top} z(y,x) - \psi(\theta; x) \right\} \pi(\theta ){\text{,}}$$ 
+where $\pi(\theta )$ is the prior distribution of the parameters. We need to use MCMC because the normalising constant of $\pi(\theta | y,x)$ is not analytically tractable (nor is the normalising constant of the model, $\psi(\theta; x) $).
+
+## Download and extract data
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online. 
+
+```{r download}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+adj <- read.table(unz(temp, "s50-network1.dat"))
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+
+Format the network and set smoke at the second wave as our outcome variable
+```{r symmetrise}
+n <- nrow(adj)
+adj <- as.matrix(adj) # convert from data.frame to matrix
+smoke <- smoke[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+```
+
+
+
+## Load ALAAM routines
+
+Download the script 'MultivarALAAMalt.R' and read in the routines
+```{r loadsna, eval=FALSE}
+source('MultivarALAAMalt.R')
+```
+
+```{r loadsna2, include=FALSE}
+source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R')
+```
+
+### Format covariates
+For a Markov model [@robins2001network], the sufficient statistics are, degrees $x_{i\cdot}=\sum_j x_{ij}$, two-stars $\binom{x_{i\cdot}}{2}$, three-stars $\binom{x_{i\cdot}}{3}$, and triangles $\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$. These can be be pre-calculated and used as monadic covariates
+
+```{r structur}
+out.degree <-matrix( rowSums(adj), n, 1) # number of ties sent
+in.degree <- matrix( colSums(adj) , n, 1 ) # number of ties received
+rec.ties <-  matrix( rowSums(adj * t(adj) ), n , 1) # number of ties that are mutual
+in.two.star <- matrix( choose(in.degree,2),n,1) #  in-stars refecting dispersion in popularity
+out.two.star <- matrix( choose(out.degree,2),n,1) #  out-stars refecting dispersion in activity
+mix.two.star <- in.degree*out.degree - rec.ties # correlation between indegree and outdegree
+in.three.star <- matrix( choose(in.degree,3),n,1) # furhter measure of in-degree heterogeneity
+out.three.star <- matrix( choose(out.degree,3),n,1) # furhter measure of out-degree heterogeneity
+triangles <- rowSums( adj* (adj %*% t(adj) )  ) # embedded in transitive triads
+```
+
+#### Indirect ties
+
+Indirect ties can be defined in a number of ways. Firstly we can define the number of indirect ties of $i$ as
+$$
+\sum_{j} (x_{ij} x_{j +} - x_{ij}x_{ji})
+$$
+
+i.e. the total number of others that $i$ 'know' through $j$, regardeless of whether $i$ also know them directly. This can be calculated as
+
+```{r indirties1}
+num.indirect <-  adj %*% out.degree - rec.ties
+```
+
+We can also define it as the number of others the $i$ can access through $j$ without having a direct tie
+
+$$
+\sum_j x_{ij} \sum_{k}(1-x_{ik})x_{jk}
+$$
+
+This measure does not count the number of unique others that $i$ *only* has indirect ties to
+$$
+\sharp \{ k : x_{ik}=0,\max_j(x_{ij}x_{jk})>0 \}
+$$
+
+```{r indirectunique}
+num.indirect <- matrix(0,n,1)
+for (i in c(1:n))
+{
+  if ( sum( adj[ i, ])==1 )
+  {
+    num.indirect[i] <- sum(  adj[adj[ i, ]==1, adj[ i, ]==0]  ) - (adj[i,] %*% adj[,i]>0)
+  }
+  
+  if ( sum(adj[ i, ])>1 )
+  {
+  num.indirect[i] <- sum( colSums( adj[adj[ i, ]==1, adj[ i, ]==0] ) > 0  ) - (adj[i,] %*% adj[,i]>0)
+}
+  }
+
+```
+
+Format covariates by putting them al into a matrix (the column names are only required for formatting the output)
+
+```{r formatcovs}
+covs <- cbind(sport[,1], 
+              alcohol[,1],
+              out.degree, 
+              in.degree,
+              rec.ties,
+              in.two.star,
+              out.two.star,
+              mix.two.star,
+              in.three.star,
+              out.three.star,
+              triangles)
+colnames(covs) <- c("Sport",
+                    "Alcohol",
+                    "indegree",
+                    "outdegree",
+                    "reciprochation" ,
+                    "instar",
+                    "outstar",
+                    "twopath",
+                    "in3star",
+                    "out3star",
+                    "transitive")
+head(covs)
+```
+
+### Running an independent response model
+
+Run prelimary Markov model that does not include a contagion effect
+```{r firstrun}
+res.0 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 100,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+```
+
+You will notice in the output that the simple contagion effect is reported as zero because it hasn't been estimated. The summary table indicate that the MCMC sample size is notwhere long enough. The effective sample sizes are around 20, meaning that we have to be careful with interpreting uncertainty. Taking a look at the MCMC output in trace plots seems to indicate that the algorithm is work ok.
+
+```{r tracefirstrun}
+plot(ts(res.0$Theta[,1:10]))
+```
+
+If we used a thinning of 30 iterations, meaning that we used every 30th draw in the chains, we would get aroung 30 draws for every 1000 iterations, and the serial autocorraltion would be around 30, judgnign by the SACF column (the lag 30 sample autocorrelation funtions, SACF).
+
+#### What does ESS tell us?
+The MCMC algortihm generates a sequence $\theta_0,\theta_1,\ldots,\theta_T$ of $T$ paramter draws. The draws are made by proposing a new value $\theta^{\ast}$ given a current value $\theta_t$ in iteration $t$. This new value is either accepted, and $\theta_{t+1}$ is set to $\theta^{\ast}$, or rejected, in which case $\theta_{t+1}$ is set to $\theta_{t}$. This means that the chain could stay in one place for a number of iterations. This would mean that values $\theta_{t}$ and $\theta_{s}$, for iterations $s$ and $t$ that are close to each other, are likely to be more similar, more correlated, than for iterations $s$ and $t$ that are far appart. This is the first sources of *serial autocorrelation* in the chains. The second source, relates to how big jumps we propose, i.e. how close is $\theta^{\ast}$  to the current value $\theta_t$ in iteration $t$? If we make too small jumps, values or iterations $s$ and $t$ that are close to each other will be highly correlated.
+
+A perfect sampler would propose and accept $\theta^{\ast}$ regadeless of where we currently are in iteration $t$. If this were the case, then the effective sammple size woudl be equal to the total number of iterations. As a ficticious example, consider drawing 100 normal variates
+
+```{r normaldraws}
+theta <- rnorm(100, mean =1, sd=1.5)
+par( mfrow= c(1,2) )
+plot(theta,type='l')
+hist(theta)
+abline(v=1)
+```
+
+The draws here randomly fluctuate areound the mean (1.5), and if we project the draws to a histogram, this gives us the sample from our target distribution. The effective sample size here is equal to the number of draws
+
+```{r essnorm}
+effectiveSize(theta)
+```
+
+and the SACF at lags 5 and 10 are negligible
+```{r sacfnorm}
+as.numeric(acf(theta,plot=FALSE)[c(5,10)][[1]])
+```
+
+#### Printing results
+
+
+To get a summary of the first model, use the table function
+```{r restabindep}
+write.res.table(burnin=1, # should be set sufficiently high
+                datamat=res.0$Thetas, # the result from BayesALAAM
+                thin=1, # should be set so that SACF is sufficiently low, important for CI
+                tabname=NULL) # the name appended to the table that is saved
+```
+
+With ESS so low we have to be cautions in drawing conclusions based on the 95% intervals reported. 
+### Goodness-of-fit
+Let us for now assume that we have a good set of parameter draws from the model. 
+Based on the posterior draws in ``r 'res.0$Thetas'``, draw outcomes for goodness-of-fit
+
+```{r firstgof,warning=FALSE}
+	sim.0 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.0, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='none') # should be the same as for model fitted
+```
+
+
+The object ``r 'sim.0'`` contains the observed statistics, the goodness-of-fit distribution, and other outputs that are used for summarising in the GOF table
+
+```{r firstgoftable}
+gof.table(obs.stats=	sim.0$stats, # observed statistics included  not fitted statistics
+          sim.stats=	sim.0$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec=	sim.0$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=TRUE,
+          Imp.gof = sim.0$Imp.gof)# NB: we have missing values so we need to add these
+```
+
+> While the posterior predictive p-value is acceptable for all statistics the Markov model somewhat underestimates the simple contagion
+
+## Fit a model with social contagion
+For a basic social influence model, simplify the structural model to contain only out-degree. According to the statistical principle of hierarchy, we should include out-degree as the statistic $\sum x_{i+}y_i$ is a lower-order effect of the contagion statistic $\sum x_{ij}y_iy_j$. 
+
+Run a model that that includes a contagion effect
+```{r secondrun}
+res.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,2,4)],   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 200)     # print and save frequency
+                   # contagion ='simple' is the default so it may be omitted as an argument
+```
+
+
+Check how well the MCMC mixes do a traceplot of the poster
+
+```{r secondruntrace}
+plot(ts(res.1$Thetas))
+```
+
+If the trace pltos and the ESS indicate that the autocorrelation is too high, you can improve the mixing by using a better proposal covariance
+
+```{r propvar}
+Propsigma <- cov(res.1$Thetas)
+```
+
+which can be used as an agument ``r 'PropSigma'`` to ``r 'BayesALAAM'``. This proposal variance (covariance) matrix, directly regulates how big jumps we are proposing, as discussed above in the section on ESS.
+
+```{r thirdrun}
+res.2 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,2,4)],   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 2000,   # number of iterations
+                    saveFreq = 400,     # print and save frequency
+                    PropSigma = Propsigma )
+```
+
+
+
+We can check if the *mixing* of the posterior chains has been imrpoved by proposing moves using the covariance matrix ``r 'Propsigma'``.
+
+```{r thirdruntrace}
+plot(ts(res.2$Thetas))
+```
+
+Eye-balling the trace plots the draws seem to be moving sufficiently freely. We would probably get a sample that is good enough to use if we did more iterations.  
+
+### Check performance and posteriors
+Assuming that we are happy with the ESS and the performance in general, use ``r 'plotPost'`` to simultaneaously plot the posterior distributions, the (serial) autocorrelations, and the trace plots
+```{r thirdrunplot}
+plotPost(ALAAMresult=res.2,figname='simplecontagion')
+```
+
+
+This routine will save the plot as ``r 'simplecontagion'`` in your current working directory. 
+
+
+![Posterior summaries](/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/simplecontagion.jpg)
+
+
+In the ACF plots you should see that lags 10 and 30 correspond to the output table from ``r 'BayesALAAM'``
+
+
+If we are satisfied with the performance of the algorithm, produce a results table
+```{r restabb2}
+write.res.table(burnin=1, # should be set sufficiently high
+                datamat=res.2$Thetas, # the result from BayesALAAM
+                thin=1, # should be set so that SACF is sufficiently low, important for CI
+                tabname=NULL) # the name appended to the table that is saved
+```
+
+While the ESS is a little too low, we can take the 95% credibility intervals as rough indicators of whether there is support for an effect.
+
+> There seems to be conclusive evidence of social contagion for smoking - if your friends smoke you are more likely to smoke
+
+
+
+## Fit a model with more advanced influence effects
+Run a model that that includes a simple contagion effect and contagion through reciprochated dyads. Since reciprochated ties $\sum x_{ij}x_{ji}(y_i+y_j)$ is a lower-order effect to *reciprochal contagion* $\sum x_{ij}x_{ji}y_iy_j$, we also add reciprochated ties.
+```{r thirdruncomp}
+res.3 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,2,4,5)],   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 200,     # print and save frequency
+                   contagion =c('simple','recip') )
+```
+
+From the autocorrelation function (some very high autocorrelations still at lag 30) and the low ESS, it is clear the algortihm can be improved. 
+
+```{r thirdrunctable}
+write.res.table(burnin=1, # should be set sufficiently high
+                datamat=res.3$Thetas, # the result from BayesALAAM
+                thin=1, # should be set so that SACF is sufficiently low, important for CI
+                tabname=NULL) # the name appended to the table that is saved
+```
+
+> Including reciprochal contagion does not seem to alter model and there is no evidence of a reciprochal contagion
+
+For a model with more advanced contagion effects, could consider including contagion through indirect contacts ('indirect') and contagion through transitive triads ('transitive').
+
+> When inclulding a higher order contagion effect, be sure to include the lower-level statistics as well as the lower-level contagion effects if possible
+
+
+# Handling missing data
+
+The ALAAM routine automatically handles missing data in the dependent variable. Set smoking to missing for a the first five individuals
+
+```{r codemissing}
+smoke[1:5] <- NA
+```
+
+Re-running the second model will not involve any changes
+
+```{r thirdrunna}
+res.2.na <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,2,4)],   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 200,     # print and save frequency
+                    PropSigma = Propsigma, 
+                    missFreq = 500) # how many imputed datasets to save (these are used for GOF)
+```
+
+The output to screen that says for example ``r 'imputed ones:  2  out of  5 '``, tells us how many of the 5 missing values in that iteration that have been imputed with a 1.
+
+> With 10% or responses missing we see some attenuation of effects
+
+## Checking GOF with missings
+In the ordinary GOF the observed statistics are compared with the simulated statistics. When we have missing data, we do not have one value for each statistic, but a range of values.
+```{r missgof,warning=FALSE}
+	sim.2.na <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.2.na, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='simple') # should be the same as for model fitted
+```
+
+
+```{r nagoftable}
+gof.table(obs.stats=	sim.2.na$stats, # observed statistics included  not fitted statistics
+          sim.stats=	sim.2.na$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec=	sim.2.na$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=TRUE, # 
+          Imp.gof = sim.2.na$Imp.gof)
+```
+
+### Plot goodness of fit with missing
+We can compare the statistics for the predictive distribution under the fitted model, with the imputed or complemented datasets. Look at the statistic for 'indirect contagion'
+
+```{r gofplot}
+boxplot(sim.2.na$Sav.gof[4,],sim.2.na$Imp.gof[4,],names = c('GOF','observed'), main='GOF for indirect contagion')
+```
+
+The GOF distribution clearly overlaps the observed+missing. The 5 missing values is what creates variation in the righ-hand box.
+
+## Model selection
+
+We may evaluate the deviance
+$$
+D(\theta) = - 2 \ell (\theta ; y)
+$$
+for values $\theta_1,\ldots,\theta_G$ from our posterior draws, where  $\ell (\theta ; y)$ is the log-likelihood.
+
+### Calculate 
+
+Likelihoods are evaluated relative to an independent model for which the likelihood can be calculated exactly:
+
+```{r indeplike}
+logit.est <- glm(res.1$ALAAMobj$y~res.1$ALAAMobj$covariates, family = binomial(link = "logit"))
+p <- dim(res.1$Thetas)[2]
+thetaRef <- matrix(0,p,1)
+thetaRef[1] <- summary(logit.est)$coef[1,1]
+thetaRef[3:p] <- summary(logit.est)$coef[2:(p-1),1]
+
+```
+
+
+When evaluating deviance across the posterior draws, we ideally want to have suffiently spaced out and approximately independent draws from the posterior os possible. In the list of arguments ``r 'burnin'`` is the number of parameter draws that are discarded and ``r 'thinning'`` is the number of iterations that are discarded between sample draws. Node that if ``r 'dim(res.1$Thetas)[1]'`` is $N$, then the total number of parameter draws you use will be ``r '(N-burnin)/thinning'``.
+
+Calculating the posterior deviances is done based on path of length ``r 'numbridges'``, linking ``r 'thetaRef'`` with the paramter. The (log) ration of normalising constants is estimated based on a MCMC sample from the model based on ``r 'numYsamps'``. This sample size has to be large but does not have to be too large. The thining in generating these vectors is ``r 'Yburnin'``. The larger this and `r 'numYsamps'`` the better precision you get.
+
+> Evaluating the deviance takes a while - be patient; the routine will print to screen how many paramters you have eveluated the relative deviance for out of the total number
+
+```{r postedev1}
+relLike <- aitkinPostDev(ALAAMresult=res.1,# the ALAAM results object
+                           burnin=20, # number of parameter draws to be discarded - should eliminate dependence on initial conditions
+                           thinning=15, # model selection is more sensitive to serial autocorrelation than point estimates and standard deviations
+                           numYsamps=100, # number of simulated vectors to base Metropolis expectation on
+                           thetaRef=t(thetaRef), # input the parameters used for reference for evaluating independent likelihood
+                           numbridges=20, # 20 bridges should be enough but more will give higher precision
+                           Yburnin=1000)
+
+```
+
+
+The deviances are all calculated relative to the deviance for a model without network dependence. Hence ``r 'aitkinPostDev'`` returns relative likelihoods:
+$$
+\ell (\theta^{[g]} ; y) - \ell_{\rm indep} (\hat{\theta } ; y)
+$$
+
+To transform these relative measures into a likelihood $\ell (\theta^{[g]} ; y) $ that does not include $\ell_{\rm indep} (\hat{\theta} ; y)$, we first calculate the likelihood for the independent model, evaluated in $\hat{\theta}$ (which we have set to ``r 'thetaRef'``)
+
+```{r ideplike}
+indeploglike <- independLike(ALAAMobj=res.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=thetaRef[c(1,3:p)] # these are the independent model parameters we estimated earlier
+                             )
+```
+
+### Calculate the deviance
+
+The posterior deviance is now
+
+```{r rellike}
+dev <- -2*(relLike*(20/21)+as.numeric(indeploglike))
+```
+
+#### Plot the posterior deviance
+
+Following @aitkin2017statistical, we can plot the cumulative distribution function of the posterior deviance:
+
+```{r postdevecdf}
+muppet <- ecdf(dev)
+xa <- seq(min(dev),max(dev),length.out = 200)
+plot(xa ,muppet(xa  ), type='l',bty='n' ,xlab='deviance',ylab='CDF',cex.lab=.7,cex.axis=0.7)
+```
+
+By plotting the ECDF of the deviance for different models, we can use the criterion of @aitkin2017statistical for determining whether there is strong evidence to favour any model.
+
+> If the ECDF for one model is to the left of the ECDF for another model, there is more support for the former. The greater the separation of the curves, the greater the evidence.
+
+### Deviance Information Criteron
+
+The DIC can be calcualted from the posterior deviances using the formula of @spiegelhalter2002bayesian or @gelman2013bayesian. The difference between the two ways of calculating DIC lies in the calculation of $p_D$.
+
+First, calculate
+$$
+D(\bar{\theta}) = - 2\ell(\bar{\theta}; y)
+$$
+
+This is relatively quick as we only need to evaluate the likelihood in one point
+
+```{r deviancemena}
+theta.bar.1 <- colMeans(res.1$Theta)
+likeeval.1 <- modelSelALAAM(ALAAMresult=res.1,
+                            burnin=1000, 
+                            numYsamps=100,
+                            thinning=5,
+                            modalPoint=t(theta.bar.1 ),
+                            numbridges=20,
+                            yburning=3000,
+                            likelihoodOnly=TRUE,
+                            thetaRef=t(thetaRef) )
+dev.exp.1 <- -2*(likeeval.1$relloglike+as.numeric(indeploglike))
+```
+
+Now we can calculate the DIC
+```{r DICcal}
+###### calulate pD
+dev.bar <- mean(dev)
+pD1 <- dev.bar - dev.exp.1 # this is p_D in Spiegelhalter et al
+pV1 <- var(dev)/2 # this is Gelman's calculation
+spiegDIC.1 <-  dev.bar + pD1
+gelmDIC.1 <- dev.bar + pV1
+```
+
+These two DIC values can now be compared to the DIC calculated for any other model specification. Here
+
+
+```{r DICeval}
+###### calulate pD
+spiegDIC.1
+gelmDIC.1
+```
+
+
+
+
+## Performing ALAAM where networks are imputed from ERGM
+
+Assuming that there are missing tie-variables (and possibly other missing covariates), let's assume that we have $G$ networks $x^{[1]},\ldots,x^{[2]}$ imputed from $ERGM(\beta)$, that has been marginalised with respect to $\beta$. Let us denote the predictive distribution of the $x^{[g]}$'s by $p(x)$, then the implied posterior for $\theta$ is based on the likelihood
+$$
+E_x(p(y| x, \theta ))=\sum_{x}p(y| x, \theta ) p(x)
+$$
+
+When calculating the deviance, 
+$$
+\ell (\theta ; y) = \log \{ E_x(p(y| x, \theta )) \}
+$$
+We can use a Monte Carlo estimate for the expectation
+
+$$
+\hat{\ell} (\theta ; y) = \log \frac{1}{G} \sum_g \exp{\ell (\theta ; y,x^{[g] })}
+$$
+This quantity is straightforward to calculate by calculating the relative likelihoods for each set of imputations. The likelihoods need to be calculated for the same parameter values however. When there are missing values in the outcome $y$, imputations on the outcome are needed for the calculations.
+
+### A simplified pooling of posterior deviances
+
+While these are taken care of by virtue of the path sampler used to evaluate the likelihoods are simulation based, we can simplify the approach by letting $\hat{\ell} (\theta ; y) $ be based on **one** sample point, for each of the parameter values in the combined posteriors. For imputed networks $x^{[1]},\ldots,x^{[G]}$, where we denote the ALAAM likelihoods $\ell_{g} (\theta ; y) $, for $g=1,\ldots,G$, we have run $G$ ALAAM estimations, for each $g$ having posterior draws $\theta^{[1,g]},\ldots,\theta^{[K,g]}$, estimate
+$$
+\hat{\ell}_{rel} (\theta^{[k,g]} ; y) =\hat{\ell} (\theta^{[k,g]} ; y) - \ell_{\rm indep} (\hat{\theta } ; y)
+$$
+
+using ``r'aitkinPostDev'`` and adding the independent likelihood obtained from ``r 'independLike'``. 
+
+
+> The point estimate for the independent model $\hat{\theta}$ needs to be the same across all $g=\ldots,G$
+
+
+For the posterior deviance we can then base the ECDF on combining the individual deviances
+$$
+-2\hat{\ell} (\theta^{[1,1]} ; y),\ldots,-2\hat{\ell} (\theta^{[K,1]} ; y),\ldots,-2\hat{\ell} (\theta^{[1,G]} ; y),\ldots,-2\hat{\ell} (\theta^{[K,G]} ; y)
+$$
+
+The lielihood ``r 'likeeval.1 '`` above, used for $p_D$ needs to be based on an average likelihood however.
+
+
+# References

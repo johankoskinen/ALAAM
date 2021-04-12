@@ -1,0 +1,289 @@
+---
+title: "Short ALAAM"
+output: html_document
+bibliography: ALAAMreferences.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Download and extract data
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online. 
+
+```{r download}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+adj <- read.table(unz(temp, "s50-network1.dat"))
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke.raw <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+
+Format the network and set smoke at the second wave as our outcome variable
+```{r symmetrise}
+n <- nrow(adj)
+adj <- as.matrix(adj) # convert from data.frame to matrix
+smoke <- smoke.raw[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+smoke[c(1:2)] <- NA # let person 1 and 2 be non-respondents
+```
+
+
+
+## Load ALAAM routines
+
+Download the script 'MultivarALAAMalt.R' and read in the routines
+```{r loadsna, eval=FALSE}
+source('MultivarALAAMalt.R')
+```
+
+```{r loadsna2, include=FALSE}
+source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R')
+```
+
+### Format covariates
+For a Markov model [@robins2001network], the sufficient statistics are, degrees $x_{i\cdot}=\sum_j x_{ij}$, two-stars $\binom{x_{i\cdot}}{2}$, three-stars $\binom{x_{i\cdot}}{3}$, and triangles $\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$. These can be be pre-calculated and used as monadic covariates
+
+```{r structur}
+out.degree <-matrix( rowSums(adj), n, 1) # number of ties sent
+rec.ties <-  matrix( rowSums(adj * t(adj) ), n , 1) # number of ties that are mutual
+```
+
+Format covariates by putting them al into a matrix (the column names are only required for formatting the output)
+
+```{r formatcovs}
+covs <- cbind(sport[,1], 
+              alcohol[,1],
+              out.degree, 
+              rec.ties)
+colnames(covs) <- c("Sport",
+                    "Alcohol",
+                    "outdegree",
+                    "reciprochation")
+head(covs)
+```
+
+
+### Dyad independent Markov model
+```{r firstrun}
+res.0 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 100,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+```
+
+### Goodness of fit
+If you want to supply a covariate to evaluate in the GOF, you can do that by supplying ``r 'user.covars'``. For example, let us use the proportion of alcohol in alter
+
+```{r usercovar,warning=FALSE}
+user.covars <- as.data.frame(adj %*% matrix(alcohol[,1],n,1 )/(out.degree +1 ))
+names(user.covars) <- 'prop.alc.alter'
+```
+
+```{r firstgof,warning=FALSE}
+sim.0 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.0, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='none',# should be the same as for model fitted
+                              user.covars = user.covars) # the gof will now evaluate the fit for this covariate
+```
+
+```{r firstgoftable}
+gof.table(obs.stats=	sim.0$stats, # observed statistics included  not fitted statistics
+          sim.stats=	sim.0$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec=	sim.0$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=TRUE,
+          Imp.gof = sim.0$Imp.gof)
+```
+
+
+GOF-name | interpretation | statistic
+----- | ----- | -----    
+intercept | intercept |       $\sum y_{i}$
+simple cont.| direct contagion through outgoing ties |     $\sum y_{i}y_{j}x_{i,j}$
+recip cont.  | contagion through reciprochated ties |    $\sum y_{i}y_{j}x_{i,j}x_{j,i}$
+indirect cont. | indirect contagion |  $\sum_{j,k}y_ix_{i,j}x_{j,k}y_k$
+closedind cont. | contaigion in closed triad | $\sum_{j,k}y_ix_{i,j}x_{j,k}x_{i,k}y_k$
+transitive cont.| contagion in transitive triple | $\sum_{j,k}x_{i,j}x_{j,k}x_{i,k}y_iy_jy_k$
+outdegree   | Markov outdegree |     $\sum y_{i}\sum_j x_{i,j}$
+indegree     |  Markov outdegree |   $\sum y_{i}\sum_j x_{j,i}$
+reciprochation | Markov reciprochal ties |  $\sum y_{i}\sum_j x_{i,j}x_{i,j}$
+instar      | Markov in-star | $\sum y_{i} {\binom{\sum_j x_{i,j}}{2}}$    
+outstar     |  Markov out-star | $\sum y_{i} {\binom{\sum_j x_{j,i}}{2}}$     
+twopath    |  Markov mixed star | $\sum y_{i} \sum x_{i,j}x_{i,k}$     
+in3star    |  Markov in-three star | $\sum y_{i} \sum x_{j,i}x_{k,i}x_{h,i}$ 
+out3star    |  Markov out-three star | $\sum y_{i} \sum x_{i,j}x_{i,k}x_{i,h}$ 
+transitive  |  Markov transitive triangle | $\sum y_i \sum_{j,k}x_{i,j}x_{j,k}x_{i,k}$ 
+cyclic      |  Markov cyclic triangle | $\sum y_i \sum_{j,k}x_{i,j}x_{j,k}x_{k,i}$ 
+indirect     |  Markov indirect, non-exclusive ties | $\sum_{j} (x_{i,j} x_{j, +} - x_{i,j}x_{j,i})$ 
+excl.indirect    |  Markov indirect, unique nodes | $\sharp \{ k : x_{ik}=0,\max_j(x_{i,j}x_{j,k})>0 \}$ 
+prop.alc.alter   | a user-defined alter attribute variable | $\frac{1}{1+x_{i,+}} \sum x_{i,j}a_{j}$
+
+## Model selection
+
+We may evaluate the deviance
+$$
+D(\theta) = - 2 \ell (\theta ; y)
+$$
+for values $\theta_1,\ldots,\theta_G$ from our posterior draws, where  $\ell (\theta ; y)$ is the log-likelihood. Details are found in @koskinen2020bayesian.
+
+### Posterior deviances for Markov models
+
+#### Evaluate the likelihood
+
+For a Markov model we can evaluate the likelihood analytically.
+
+```{r markdev.1}
+N.sim <- dim(res.0$Thetas)[1]
+p <- dim(res.0$Thetas)[2]
+# total points at which deviance calcualted:
+thinning <- 5
+burnin <- 10
+pick.samples <- seq(burnin,N.sim,by=thinning) # this is just picking out thinned sample points
+Tot.Samp <- length(pick.samples) # this is because the function aitkinPostDev thinns your posterior sample
+Tot.Samp
+
+ind.like <- matrix(0,Tot.Samp,1)
+for (k in c(1:Tot.Samp))
+{
+  theta.ref <- res.0$Thetas[pick.samples[k], c(1,3:p) ] # note: we discard of the contagion parameter that is set to 0
+  ind.like[k] <- independLike(ALAAMobj=res.0$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=theta.ref # these are the independent model parameters we estimated earlier
+                             )
+}
+
+
+
+```
+
+#### Calcualting the deviance
+
+Same as for the contagion models we combine the likelihoods into the combined deviances
+
+
+``` {r combdevind}
+dev.ind <- -2*ind.like
+```
+
+## Fitting a contagion model
+
+```{r seconsrun}
+res.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500)  
+```
+
+### Goodness of fit
+
+```{r secondgof,warning=FALSE}
+sim.1 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.1, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='none',# should be the same as for model fitted
+                              user.covars = user.covars) # the gof will now evaluate the fit for this covariate
+```
+
+```{r secondgoftable}
+gof.table(obs.stats=	sim.1$stats, # observed statistics included  not fitted statistics
+          sim.stats=	sim.1$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec=	sim.1$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGof', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=TRUE,
+          Imp.gof = sim.1$Imp.gof)
+```
+
+
+### Posterior deviances for the contagion model
+
+#### Evaluate the likelihood
+Evaluating the likelihood is time-consuming so let us try to economise on the number of sample points we use.
+
+Let us assume that we have ``r 'num.imps'`` imputed networks. The total evaluations ``r 'Tot.Samp'`` that we get from ``r 'aitkinPostDev'`` depends on the size of the posterior sample ``r 'dim(res.1$Thetas)[1]'`` as well as the thinning and burnin
+
+```{r settingsampsize}
+N.sim <- dim(res.1$Thetas)[1]
+# total points at which deviance calcualted:
+thinning <- 20
+burnin <- 1000
+Tot.Samp <- length(seq(burnin,N.sim,by=thinning)) # this is because the function aitkinPostDev thinns your posterior sample
+Tot.Samp
+```
+
+If we have a large ``r 'num.imps'`` we do not need ``r 'Tot.Samp'`` to be too big. Aim to get the total ``r 'num.imps*Tot.Samp'`` in the range 500 to 1000.
+
+#### Setting the number of vectors Y that are use to estimat likelihood
+
+For a certain number of bridges the (log) ratio of normalising constants are evaluated based on a draw of $Y$ from the ALAAM. This sample size does not have to be too big. A sample size ``r 'numYsamps'`` that is 100 is good but to save time we can probably get away with 30.
+
+``` {r numysamp}
+numYsamps <- 30
+```
+
+### Evaluate the posterior deviances
+
+Evaluating the likelihood will take some time.
+
+```{r postedev1}
+logit.est <- glm(res.1$ALAAMobj$y~res.1$ALAAMobj$covariates, family = binomial(link = "logit"))
+p <- dim(res.1$Thetas)[2]
+thetaRef <- matrix(0,p,1)
+thetaRef[1] <- summary(logit.est)$coef[1,1]
+thetaRef[3:p] <- summary(logit.est)$coef[2:(p-1),1]
+relLike.1 <- aitkinPostDev(ALAAMresult=res.1,# the ALAAM results object
+                           burnin=burnin , # number of parameter draws to be discarded - should eliminate dependence on initial conditions
+                           thinning=thinning, # model selection is more sensitive to serial autocorrelation than point estimates and standard deviations
+                           numYsamps=numYsamps, # number of simulated vectors to base Metropolis expectation on
+                           thetaRef=t(thetaRef), # input the parameters used for reference for evaluating independent likelihood
+                           numbridges=20, # 20 bridges should be enough but more will give higher precision
+                           Yburnin=1000)
+
+indeploglike.1 <- independLike(ALAAMobj=res.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                               theta=thetaRef[c(1,3:p)] # these are the independent model parameters we estimated earlier
+                               )
+
+dev <- -2*(relLike.1*(20/21)+as.numeric(indeploglike.1))# this is the estimated deviances for the first network imputation
+```
+
+## Compare deviances for Markov
+
+Plot the posterior deviances
+
+``` {r plotdevs}
+muppet <- ecdf(dev)
+xa <- seq(min(dev),max(dev),length.out = 200)
+plot(xa ,muppet(xa  ), 
+     type='l',bty='n' ,
+     xlab='deviance',
+     ylab='CDF',
+     cex.lab=.7,cex.axis=0.7,
+     xlim=range(c(dev, dev.ind)))
+muppet <- ecdf(dev.ind)
+xa <- seq(min(dev.ind),max(dev.ind),length.out = 200)
+lines( xa ,muppet(xa  ) , col='red' )# the posterior deviances for the Markov models
+
+```
+
+> If there is clear blue water between the CDFs, then the deviances are said to be stochastically ordered and there is support for the model with the CDF to the lefts
+
+# References

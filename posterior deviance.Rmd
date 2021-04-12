@@ -1,0 +1,478 @@
+---
+title: "Model selection for ALAAM"
+output: html_document
+bibliography: ALAAMreferences.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Purpose
+
+This is a quick demonstration for how to calculate the posterior deviance for
+
+* a Markov model,
+* a contagion model,
+* under the assumption that analyses have been pooled across imputed networks
+
+## Download and extract data
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online. 
+
+```{r download}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+adj <- read.table(unz(temp, "s50-network1.dat"))
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+## Nework formatting
+
+Create three networks that differ in randomly selected places.
+
+### Network 1
+
+Format the network and set smoke at the second wave as our outcome variable
+```{r symmetrise}
+adj.1 <- adj
+n <- nrow(adj)
+adj.1 <- as.matrix(adj.1) # convert from data.frame to matrix
+smoke <- smoke[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+smoke[c(1:2)] <- NA # let person 1 and 2 be non-respondents
+```
+
+Format covariates
+
+```{r formatcovs}
+out.degree <-matrix( rowSums(adj.1), n, 1) # number of ties sent
+in.degree <- matrix( colSums(adj.1) , n, 1 ) # number of ties received
+rec.ties <-  matrix( rowSums(adj.1 * t(adj.1) ), n , 1) # number of ties that are mutual
+covs.1 <- cbind(sport[,1], 
+              alcohol[,1],
+              out.degree, 
+              in.degree,
+              rec.ties)
+colnames(covs.1) <- c("Sport",
+                    "Alcohol",
+                    "indegree",
+                    "outdegree",
+                    "reciprochation" )
+head(covs.1)
+```
+
+### Network 2
+
+To mimic the situation of having a second, imputed dataset
+```{r imputed}
+adj.2 <- adj.1 # convert from data.frame to matrix
+n.impu <- 7
+sender <- sample(c(1:n),size=n.impu)
+receiver <- sample(c(1:n),size=n.impu)
+adj.2[sender,receiver] <- 1- adj.1[sender,receiver] # randomly selected ties are toggled
+diag(adj.2) <- 0
+```
+
+
+Format covariates
+
+```{r formatcovs2}
+out.degree <-matrix( rowSums(adj.2), n, 1) # number of ties sent
+in.degree <- matrix( colSums(adj.2) , n, 1 ) # number of ties received
+rec.ties <-  matrix( rowSums(adj.2 * t(adj.2) ), n , 1) # number of ties that are mutual
+covs.2 <- cbind(sport[,1], 
+              alcohol[,1],
+              out.degree, 
+              in.degree,
+              rec.ties)
+colnames(covs.2) <- c("Sport",
+                    "Alcohol",
+                    "indegree",
+                    "outdegree",
+                    "reciprochation" )
+
+```
+
+### Network 3
+
+To mimic the situation of having a third, imputed dataset
+```{r imputed2}
+adj.3 <- adj.1 # convert from data.frame to matrix
+n.impu <- 7
+sender <- sample(c(1:n),size=n.impu)
+receiver <- sample(c(1:n),size=n.impu)
+adj.3[sender,receiver] <- 1- adj.1[sender,receiver] # randomly selected ties are toggled
+diag(adj.3) <- 0
+```
+
+
+```{r formatcovs3}
+out.degree <-matrix( rowSums(adj.3), n, 1) # number of ties sent
+in.degree <- matrix( colSums(adj.3) , n, 1 ) # number of ties received
+rec.ties <-  matrix( rowSums(adj.3 * t(adj.3) ), n , 1) # number of ties that are mutual
+covs.3 <- cbind(sport[,1], 
+              alcohol[,1],
+              out.degree, 
+              in.degree,
+              rec.ties)
+colnames(covs.3) <- c("Sport",
+                    "Alcohol",
+                    "indegree",
+                    "outdegree",
+                    "reciprochation" )
+```
+
+## Load ALAAM routines
+
+Download the script 'MultivarALAAMalt.R' and read in the routines
+```{r loadsna, eval=FALSE}
+source('MultivarALAAMalt.R')
+```
+
+```{r loadsna2, include=FALSE}
+source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R')
+```
+
+
+### Running Markov models
+
+Run prelimary Markov model that does not include a contagion effect.
+
+#### Network 1
+
+```{r estim1}
+res.m.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.1,           # network
+                    covariates = covs.1,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+
+```
+
+#### Network 2
+
+
+```{r estim2}
+res.m.2 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.2,           # network
+                    covariates = covs.2,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+
+```
+
+#### Network 3
+
+
+```{r estim3}
+res.m.3 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.3,           # network
+                    covariates = covs.3,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+
+```
+
+### Pasting together posteriors
+
+If networks have been imputed using a proper, model-based procedure, the joint posterior
+
+```{r pastetheta}
+Thetas.0 <- rbind(res.m.1$Thetas,res.m.2$Thetas,res.m.3$Thetas)
+plot(ts(Thetas.0))
+
+```
+
+### Running Contagion models
+
+Run a model that includes a contagion effect.
+
+#### Network 1
+
+```{r estim11}
+res.m.1.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.1,           # network
+                    covariates = covs.1,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500)  # type of contagion
+save(res.m.1.1,file='results.1.RData')
+```
+
+#### Network 2
+
+
+```{r estim21}
+res.m.2.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.2,           # network
+                    covariates = covs.2,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500)  # type of contagion
+save(res.m.2.1,file='results.2.RData')
+```
+
+#### Network 3
+
+
+```{r estim31}
+res.m.3.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj.3,           # network
+                    covariates = covs.3,   # covariates
+                    directed = TRUE,    # directed / undirecred network
+                    burnin = 1000,
+                    Iterations = 5000,   # number of iterations
+                    saveFreq = 500)  # type of contagion
+save(res.m.3.1,file='results.3.RData')
+```
+
+### Pasting together posteriors
+
+If networks have been imputed using a proper, model-based procedure, the joint posterior
+
+```{r pastetheta1}
+Thetas.1 <- rbind(res.m.1.1$Thetas,res.m.2.1$Thetas,res.m.3.1$Thetas)
+plot(ts(Thetas.1))
+
+```
+
+### Caluclating deviances for contagion model
+
+#### Setting the number of sample points for the posterior deviances
+
+Evaluating the likelihood is time-consuming so let us try to economise on the number of sample points we use.
+
+Let us assume that we have ``r 'num.imps'`` imputed networks. The total evaluations ``r 'Tot.Samp'`` that we get from ``r 'aitkinPostDev'`` depends on the size of the posterior sample ``r 'dim(res.m.1.1$Thetas)[1]'`` as well as the thinning and burnin
+
+```{r settingsampsize}
+N.sim <- dim(res.m.1.1$Thetas)[1]
+# total points at which deviance calcualted:
+thinning <- 30
+burnin <- 1000
+Tot.Samp <- length(seq(burnin,N.sim,by=thinning)) # this is because the function aitkinPostDev thinns your posterior sample
+Tot.Samp
+```
+
+If we have a large ``r 'num.imps'`` we do not need ``r 'Tot.Samp'`` to be too big. Aim to get the total ``r 'num.imps*Tot.Samp'`` in the range 500 to 1000.
+
+#### Setting the number of vectors Y that are use to estimat likelihood
+
+For a certain number of bridges the (log) ratio of normalising constants are evaluated based on a draw of $Y$ from the ALAAM. This sample size does not have to be too big. A sample size ``r 'numYsamps'`` that is 100 is good but to save time we can probably get away with 30.
+
+``` {r numysamp}
+numYsamps <- 30
+```
+
+### Evaluate the posterior deviances
+
+#### Network 1
+
+```{r postedev1}
+logit.est <- glm(res.m.1.1$ALAAMobj$y~res.m.1.1$ALAAMobj$covariates, family = binomial(link = "logit"))
+p <- dim(res.m.1.1$Thetas)[2]
+thetaRef <- matrix(0,p,1)
+thetaRef[1] <- summary(logit.est)$coef[1,1]
+thetaRef[3:p] <- summary(logit.est)$coef[2:(p-1),1]
+relLike.1 <- aitkinPostDev(ALAAMresult=res.m.1.1,# the ALAAM results object
+                           burnin=burnin , # number of parameter draws to be discarded - should eliminate dependence on initial conditions
+                           thinning=thinning, # model selection is more sensitive to serial autocorrelation than point estimates and standard deviations
+                           numYsamps=numYsamps, # number of simulated vectors to base Metropolis expectation on
+                           thetaRef=t(thetaRef), # input the parameters used for reference for evaluating independent likelihood
+                           numbridges=20, # 20 bridges should be enough but more will give higher precision
+                           Yburnin=1000)
+
+save(relLike.1,file='dev1.RData')
+indeploglike.1 <- independLike(ALAAMobj=res.m.1.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                               theta=thetaRef[c(1,3:p)] # these are the independent model parameters we estimated earlier
+                               )
+
+dev.1 <- -2*(relLike.1*(20/21)+as.numeric(indeploglike.1))# this is the estimated deviances for the first network imputation
+```
+
+
+#### Network 2
+
+```{r postedev2}
+logit.est <- glm(res.m.2.1$ALAAMobj$y~res.m.2.1$ALAAMobj$covariates, family = binomial(link = "logit"))
+thetaRef <- matrix(0,p,1)
+thetaRef[1] <- summary(logit.est)$coef[1,1]
+thetaRef[3:p] <- summary(logit.est)$coef[2:(p-1),1]
+relLike.2 <- aitkinPostDev(ALAAMresult=res.m.2.1,# the ALAAM results object
+                           burnin=burnin , # number of parameter draws to be discarded - should eliminate dependence on initial conditions
+                           thinning=thinning, # model selection is more sensitive to serial autocorrelation than point estimates and standard deviations
+                           numYsamps=numYsamps, # number of simulated vectors to base Metropolis expectation on
+                           thetaRef=t(thetaRef), # input the parameters used for reference for evaluating independent likelihood
+                           numbridges=20, # 20 bridges should be enough but more will give higher precision
+                           Yburnin=1000)
+save(relLike.2,file='dev2.RData')
+indeploglike.2 <- independLike(ALAAMobj=res.m.2.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                               theta=thetaRef[c(1,3:p)] # these are the independent model parameters we estimated earlier
+                               )
+dev.2 <- -2*(relLike.2*(20/21)+as.numeric(indeploglike.2)) # the estimated deviances for the second imputed network
+```
+
+#### Network 3
+
+```{r postedev3}
+logit.est <- glm(res.m.3.1$ALAAMobj$y~res.m.3.1$ALAAMobj$covariates, family = binomial(link = "logit"))
+thetaRef <- matrix(0,p,1)
+thetaRef[1] <- summary(logit.est)$coef[1,1]
+thetaRef[3:p] <- summary(logit.est)$coef[2:(p-1),1]
+relLike.3 <- aitkinPostDev(ALAAMresult=res.m.3.1,# the ALAAM results object
+                           burnin=burnin , # number of parameter draws to be discarded - should eliminate dependence on initial conditions
+                           thinning=thinning, # model selection is more sensitive to serial autocorrelation than point estimates and standard deviations
+                           numYsamps=numYsamps, # number of simulated vectors to base Metropolis expectation on
+                           thetaRef=t(thetaRef), # input the parameters used for reference for evaluating independent likelihood
+                           numbridges=20, # 20 bridges should be enough but more will give higher precision
+                           Yburnin=1000)
+save(relLike.3,file='dev3.RData')
+indeploglike.3 <- independLike(ALAAMobj=res.m.3.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=thetaRef[c(1,3:p)] # these are the independent model parameters we estimated earlier
+                             )
+dev.3 <- -2*(relLike.3*(20/21)+as.numeric(indeploglike.3))
+```
+
+## Combine the posterior deviances
+
+Much like the posterior parameters can be combined, the deviances, being functions of the posteriors, can be combined easily
+
+``` {r combdev}
+dev <- c(dev.1,dev.2,dev.3)
+```
+
+We can plot the CDF of this as in @aitkin2017statistical, but we are really interested in comparing these devinaces across models.
+
+### Posterior deviances for Markov models
+
+For a Markov model we can evaluate the likelihood analytically.
+
+```{r markdev.1}
+N.sim <- dim(res.m.1$Thetas)[1]
+# total points at which deviance calcualted:
+thinning <- 30
+burnin <- 1000
+pick.samples <- seq(burnin,N.sim,by=thinning) # this is just picking out thinned sample points
+Tot.Samp <- length(pick.samples) # this is because the function aitkinPostDev thinns your posterior sample
+Tot.Samp
+
+ind.like.1 <- matrix(0,Tot.Samp,1)
+for (k in c(1:Tot.Samp))
+{
+  theta.ref <- res.m.1$Thetas[pick.samples[k], c(1,3:p) ] # note: we discard of the contagion parameter that is set to 0
+  ind.like.1[k] <- independLike(ALAAMobj=res.m.1$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=theta.ref # these are the independent model parameters we estimated earlier
+                             )
+}
+
+ind.like.2 <- matrix(0,Tot.Samp,1)
+for (k in c(1:Tot.Samp))
+{
+  theta.ref <- res.m.2$Thetas[pick.samples[k], c(1,3:p) ] # note: we discard of the contagion parameter that is set to 0
+  ind.like.2[k] <- independLike(ALAAMobj=res.m.2$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=theta.ref # these are the independent model parameters we estimated earlier
+                             )
+}
+
+ind.like.3 <- matrix(0,Tot.Samp,1)
+for (k in c(1:Tot.Samp))
+{
+  theta.ref <- res.m.3$Thetas[pick.samples[k], c(1,3:p) ] # note: we discard of the contagion parameter that is set to 0
+  ind.like.3[k] <- independLike(ALAAMobj=res.m.3$ALAAMobj, # this should be the same estimation object as for aitkinPostDev 
+                             theta=theta.ref # these are the independent model parameters we estimated earlier
+                             )
+}
+
+```
+
+### Combine the posterior deviances from the Markov models
+
+Same as for the contagion models we combine the likelihoods into the combined deviances
+
+
+``` {r combdevind}
+dev.ind <- -2*c(ind.like.1,ind.like.2,ind.like.3)
+```
+
+## Compare deviances for Markov
+
+Plot the posterior deviances
+
+``` {r plotdevs}
+muppet <- ecdf(dev)
+xa <- seq(min(dev),max(dev),length.out = 200)
+plot(xa ,muppet(xa  ), type='l',bty='n' ,xlab='deviance',ylab='CDF',cex.lab=.7,cex.axis=0.7)
+muppet <- ecdf(dev.ind)
+xa <- seq(min(dev.ind),max(dev.ind),length.out = 200)
+lines( xa ,muppet(xa  ) , col='red' )# the posterior deviances for the Markov models
+
+```
+
+> If there is clear blue water between the CDFs, then the deviances are said to be stochastically ordered and there is support for the model with the CDF to the lefts
+
+### Combining GOF across imputed networks
+
+The GOF distributions can be calculated for one imputed network at a time
+
+#### Network 1
+
+```{r missgof,warning=FALSE}
+	sim.1 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.m.1.1, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='simple') # should be the same as for model fitted
+```
+
+#### Network 2
+
+```{r missgof2,warning=FALSE}
+	sim.2 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.m.2.1, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='simple') # should be the same as for model fitted
+```
+
+#### Network 3
+
+```{r missgof3,warning=FALSE}
+	sim.3 <- get.gof.distribution(NumIterations=500, # number of vectors to draw
+	                              res=res.m.3.1, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iterations discarded from GOF distribution
+	                              thinning = 1000, # no. iterations between sample points
+	                              contagion ='simple') # should be the same as for model fitted
+```
+
+### Getting the combined GOF
+
+For the GOF we compare the posterior predictive distribution for $[Y_{miss}|Y_{obs}]$ against the goodness-of-fit distribution $[Y^{[rep]}|Y_{obs}]$. Both of these posterior distrubtions may be combined across imputed networks, just like the posterior thetas.
+
+```{r nagoftablecomb}
+gof.table(obs.stats=	sim.1$stats, # observed statistics included  not fitted statistics
+          sim.stats=	cbind(sim.1$Sav.gof, sim.2$Sav.gof, sim.3$Sav.gof), # combined simulated goodness-of-fit statistics
+          name.vec=	sim.2$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=TRUE, # 
+          Imp.gof = cbind(sim.1$Imp.gof,sim.2$Imp.gof,sim.3$Imp.gof) # combined imputed vectors
+          )
+```
+# References

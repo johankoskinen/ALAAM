@@ -1,0 +1,154 @@
+---
+title: "Alaam undirected"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Download and extract data
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online. 
+
+```{r download}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+adj <- read.table(unz(temp, "s50-network2.dat"))
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+
+Symmetrise the network and set smoke at the second wave as our outcome variable
+```{r symmetrise}
+n <- nrow(adj)
+adj <- as.matrix(adj) # convert from data.frame to matrix
+adj <- adj*t(adj) # use only reciprochated ties
+smoke <- smoke[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+```
+
+
+
+## Load ALAAM routines
+
+Download the script 'MultivarALAAMalt.R' and read in the routines
+```{r loadsna, eval=FALSE}
+source('MultivarALAAMalt.R')
+```
+
+```{r loadsna2, include=FALSE}
+source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R')
+```
+
+
+For a Markov model, the sufficient statistics are, degrees $x_{i\cdot}=\sum_j x_{ij}$, two-stars $\choose{x_{i\cdot}}{2}$, three-stars $\choose{x_{i\cdot}}{3}$, and triangles $\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$. These can be be pre-calculated and used as monadic covariates
+
+```{r structur}
+degree <- rowSums(adj)
+two.star <- matrix( choose(degree,2),n,1)
+three.star <- matrix( choose(degree,3),n,1)
+triangles <- rowSums( adj* (adj %*% adj) )
+```
+
+Format covariates by putting them al into a matrix (the column names are only required for formatting the output)
+
+```{r formatcovs}
+covs <- cbind(sport[,1], alcohol[,1],two.star,three.star, triangles,degree)
+colnames(covs) <- c("Sport","Alcohol","Twopaths","Threepaths","Triangles" ,"Degree")
+```
+
+
+
+Run prelimary Markov model that does not include a contagion effect
+```{r firstrun}
+res.0 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,3,5,6)],   # covariates
+                    directed = FALSE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 100,      # print and save frequency
+                    contagion = 'none')  # type of contagion
+```
+
+You will notice in the output that the simple contagion effect is reported as zero because it hasn't been estimated.
+
+
+## Goodness-of-fit
+Based on the posterior draws in ``r 'res.0$Thetas'``, draw outcomes for goodness-of-fit
+
+```{r firstgof,warning=FALSE}
+	sim.1 <- get.gof.distribution(NumIterations=1000, # number of vectors to draw
+	                              res=res.0, # the ALAAM estimation object that contains model and results
+	                              burnin=100, # no. iteractions discarded from GOF distribution
+	                              contagion ='none') # should be the same as for model fitted
+```
+
+
+The object ``r 'sim.1'`` contains the observed statistics, the goodness-of-fit distribution, and other outputs that are used for summarising in the GOF table
+
+```{r firstgoftable}
+gof.table(obs.stats=	sim.1$stats, # observed statistics included  not fitted statistics
+          sim.stats=	sim.1$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec=	sim.1$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=FALSE)
+```
+
+## Fit a model with social contagion
+Run a model that that includes a contagion effect
+```{r secondrun}
+res.1 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,3,5,6)],   # covariates
+                    directed = FALSE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 200)     # print and save frequency
+                   # contagion ='simple' is the default so it may be omitted as an argument
+```
+
+
+Check how well the MCMC mixes do a traceplot of the poster
+
+```{r secondruntrace}
+plot(ts(res.1$Thetas))
+```
+
+If the trace pltos and the ESS indicate that the autocorrelation is too high, you can improve the mixing by using a better proposal covariance
+
+```{r propvar}
+Propsigma <- cov(res.1$Thetas)
+```
+
+which can be used as an agument ``r 'PropSigma'`` to ``r 'BayesALAAM'``.
+
+If we are satisfied with the performance of the algorithm, produce a results table
+```{r restabb2}
+write.res.table(burnin=1, # should be set sufficiently high
+                datamat=res.1$Thetas, # the result from BayesALAAM
+                thin=1, # should be set so that SACF is sufficiently low, important for CI
+                tabname=NULL) # the name appended to the table that is saved
+```
+
+
+## Fit a model with more advanced influence effects
+Run a model that that includes a simple contagion effect, indirect contagion, and triadic contagion
+```{r thirdruncomp}
+res.2 <- BayesALAAM(y = smoke,           # dependent variable
+                    ADJ = adj,           # network
+                    covariates = covs[,c(1,3,5,6)],   # covariates
+                    directed = FALSE,    # directed / undirecred network
+                    Iterations = 1000,   # number of iterations
+                    saveFreq = 200,     # print and save frequency
+                   contagion =c('simple','indirect','transitive') )
+```
+
+From the autocorrelation function (some very high autocorrelations still at lag 30) and the low ESS, it is clear the algortihm can be improved. The high variability in triadic contagion seems to suggest that there are too many contagion effects howver.
