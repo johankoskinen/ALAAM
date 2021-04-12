@@ -40,13 +40,15 @@ smoke[c(1:2)] <- NA # let person 1 and 2 be non-respondents
 ## Load ALAAM routines
 
 Download the script 'MultivarALAAMalt.R' and read in the routines
-```{r loadsna, eval=FALSE}
+```{r loadsna}
 source('MultivarALAAMalt.R')
 ```
 
-```{r loadsna2, include=FALSE}
-source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R')
-```
+
+<!-- ```{r loadsna2, include=FALSE} -->
+<!-- source('/Users/johankoskinen/Desktop/frombackup/johanadmid/melbourne 2012/melbourne 2017/ASNAC/fomatting/ALAAM code may 2020/MultivarALAAMalt.R') -->
+<!-- ``` -->
+
 
 ### Format covariates
 For a Markov model [@robins2001network], the sufficient statistics are, degrees $x_{i\cdot}=\sum_j x_{ij}$, two-stars $\binom{x_{i\cdot}}{2}$, three-stars $\binom{x_{i\cdot}}{3}$, and triangles $\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$. These can be be pre-calculated and used as monadic covariates
