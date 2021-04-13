@@ -156,7 +156,7 @@ p <- dim(res.0$Thetas)[2]
 thinning <- 5
 burnin <- 10
 pick.samples <- seq(burnin,N.sim,by=thinning) # this is just picking out thinned sample points
-Tot.Samp <- length(pick.samples) # this is because the function aitkinPostDev thinns your posterior sample
+Tot.Samp <- length(pick.samples) # this is because the function aitkinPostDev thins your posterior sample
 Tot.Samp
 
 ind.like <- matrix(0,Tot.Samp,1)
@@ -225,7 +225,7 @@ Let us assume that we have ``r 'num.imps'`` imputed networks. The total evaluati
 
 ```{r settingsampsize}
 N.sim <- dim(res.1$Thetas)[1]
-# total points at which deviance calcualted:
+# total points at which deviance calculated:
 thinning <- 20
 burnin <- 1000
 Tot.Samp <- length(seq(burnin,N.sim,by=thinning)) # this is because the function aitkinPostDev thinns your posterior sample
