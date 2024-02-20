@@ -654,14 +654,11 @@ prepALAAMdata <- function(y,ADJ,covariates,directed=FALSE,useDegree = FALSE, con
 	
 	####
 	
-	if (class(ADJ)!="matrix")
-	{
-		error('Bayes ALAAM function only takes adjacency as matrix')
-	}
+	
 	
 	if (length(y)!=n)
 	{
-		error('response variable not same lenght as rows of adjacency matrix')
+		warning('response variable not same lenght as rows of adjacency matrix')
 	}
 	 if (directed)
 		 {
@@ -669,7 +666,7 @@ prepALAAMdata <- function(y,ADJ,covariates,directed=FALSE,useDegree = FALSE, con
 	degreein <- matrix(0,n,1)
 	if (sum( t(ADJ)!=ADJ  )==0 )
 	{
-		#error('you defined network as directed but it is perfectly symmetric')
+		warning('you defined network as directed but it is perfectly symmetric')
 		
 	} 
 	}
@@ -677,17 +674,17 @@ prepALAAMdata <- function(y,ADJ,covariates,directed=FALSE,useDegree = FALSE, con
 		 {
 		 	if (sum( t(ADJ)!=ADJ  )!=0)
 		 	{
-		 		error('you defined network as un-directed but it is assymetric')
+		 		warning('you defined network as un-directed but it is assymetric')
 		 	}
 		 }
 	
 	if (n != dim(ADJ)[2])
 	{
-		error('your adjacency matrix is not square')
+		warning('your adjacency matrix is not square')
 	}
 	if (sum(diag(ADJ) )!=0 )
 	{
-		error('diagonal elements of adjacency matrix non-zero')
+		warning('diagonal elements of adjacency matrix non-zero')
 	}
 
 	
