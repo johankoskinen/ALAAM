@@ -2178,8 +2178,9 @@ multiALAAM <- function(y,ADJ,covariates,useDegree=FALSE,directed=FALSE, silent=F
 			directed=directed,
 			useDegree = useDegree)
 			ALAAMobj$directed <- directed
-			statsvec <- getALAAMstats(y=ALAAMobj$y,EdgeList=ALAAMobj$EdgeList,RowIn=ALAAMobj$RowIn,degree = ALAAMobj$degree,EdgeListIn=ALAAMobj$EdgeListIn,RowInIn=ALAAMobj$RowInIn,degreein = ALAAMobj$degreein,covariates = ALAAMobj$covariates,directed=directed)
-			ALAAMobj$statsvec <- statsvec
+			#statsvec <- getALAAMstats(y=ALAAMobj$y,EdgeList=ALAAMobj$EdgeList,RowIn=ALAAMobj$RowIn,degree = ALAAMobj$degree,EdgeListIn=ALAAMobj$EdgeListIn,RowInIn=ALAAMobj$RowInIn,degreein = ALAAMobj$degreein,covariates = ALAAMobj$covariates,directed=directed)
+		statsvec <- getALAAMstats(ALAAMobj)	
+		ALAAMobj$statsvec <- statsvec
 			if (any(is.na(statsvec)))
 			{
 				print('there are missing values in stufficient statistics: check your covariates and response variable')
