@@ -3939,7 +3939,7 @@ CI <- c(xsort[lowervalue],xsort[uppervalue])
 CI
 }
 
-write.res.table <- function(ALAAMresult,burnin=1,thin=1,tabname=NULL,nameVec=NULL)
+write.res.table <- function(ALAAMresult=NULL,burnin=1,thin=1,tabname=NULL,nameVec=NULL)
 {
 	# this function writes the posterior means and credibility intervals
 	# to a csv file
