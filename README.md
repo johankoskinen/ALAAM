@@ -4,7 +4,7 @@ This is a collection of routines for Bayesian estimation of the Auto-Logistic Ac
 
 The source `balaam.R` is a collection of different main functions and helper functions
 
-You will find documentation of core functions in  [https://github.com/johankoskinen/ALAAM/blob/main/alaam_effects](https://github.com/johankoskinen/ALAAM/alaam_effects.pdf)
+You will find documentation of core functions in  [alaam_effects](https://github.com/johankoskinen/ALAAM/blob/main/alaam_effects.pdf)
 <!-- CONTACT -->
 ## Contact
 
