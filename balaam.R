@@ -5659,7 +5659,7 @@ BayesALAAM.formula <- function(ALAAMobj,Iterations=1000,silent=FALSE,
     canchangeMiss <- which(is.na(ALAAMobj$y))
     ALAAMobj$y[is.na(ALAAMobj$y)] <- 0
     print(paste('you have ',length(canchangeMiss),' missing entries in response'))
-    print(canchange)
+    print(ALAAMobj$canchange)
     bias <- matrix(0,length(ALAAMobj$y),1)
     
     missFreq <- missFreq
