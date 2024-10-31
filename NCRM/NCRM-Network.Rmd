@@ -1,0 +1,457 @@
+---
+title: "Tutorial on social influence - NCRM"
+author: "[Johan Koskinen](https://https://www.su.se/english/profiles/kosk-1.615440)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+editor_options: 
+  markdown: 
+    wrap: 72
+bibliography: references.bib
+---
+```{r, include = FALSE}
+xfun::download_file("https://raw.githubusercontent.com/johankoskinen/CHDH-SNA/main/Markdowns/references.bib")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+To familarise ourselves with the inferential target and using networks in R we will start with standard autoregressive models.
+
+
+# SNA in R
+
+## Network packages
+
+We will use `r 'sna'` [@buttsSNA] and `r 'network'` [@buttsNETWORK]
+
+```{r}
+require(sna)
+require(network)
+```
+
+## Load data
+
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online.
+
+```{r}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+X <- as.matrix( read.table(unz(temp, "s50-network1.dat")) )
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+## Format data
+
+```{r symmetrise}
+n <- nrow(adj)
+adj <- as.matrix(adj) # convert from data.frame to matrix
+smoke <- smoke[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+```
+
+```{r}
+my.data <- data.frame(smoke=smoke, alcohol=alcohol[,1],sport=sport[,1])
+```
+
+
+## Basic descriptives
+
+There are a lot of network metrics implemented in `sna' (check help file). We will only look at a selection.
+
+### Network diagram
+
+Most important is to plot the network and get a feeling for it
+
+```{r}
+gplot(X)
+```
+
+### Degree distributions
+
+```{r}
+par(mfrow=c(1,2))# set up two panels
+plot(table( degree( X , cmode = "indegree")),main='Indegrees')
+plot(table( degree( X , cmode = "outdegree")),main='Outdegrees')
+```
+
+### Reciprocity
+
+```{r}
+dyad.census(X)
+```
+
+### Clustering coefficient
+
+```{r}
+gtrans(X)
+```
+
+### Triad census
+
+```{r}
+triad.census(X)
+```
+
+## Overall task
+
+The variable Alcohol use is coded as
+
+| Alcohol value |        meaning        |
+|:-------------:|:---------------------:|
+|       1       |          non          |
+|       2       | once or twice a year  |
+|       3       |     once a month      |
+|       4       |      once a week      |
+|       5       | more than once a week |
+
+We are now going to investigate if your friends alcohol use tends to
+influence your alcohol use. Start with plotting the networks with
+
+-   Node size proportional to alcohol use
+-   Colour by smoker (2-3) and non-smoker (1)
+
+```{r}
+gplot(X,vertex.cex=alcohol[,2]/2, 
+      vertex.col = ifelse(smoke==1,'red','green') )
+```
+
+Looking at the figure, do you see any evidence of *social influence*?
+
+> Big nodes seem to be tied to other big nodes and small nodes to other small nodes. Smokers also seem to hang out with other smokers.
+
+## Ordinary least squares (OLS) regression
+
+Make the assumption that the levels of smoking can be treated as a
+interval-level, continuous variable. To model the outcomes, we start
+with assuming that outcomes are independent across students using a
+regression model
+
+$$
+Y_i = \beta_0+\beta_1 m_{i,smoke} + \beta_2 m_{i,sport}+\epsilon_i
+$$
+
+where 
+
+* $\beta_0$ is the intercept, 
+* $\beta_1$ is the average difference in alcohol use for smokers relative to non-smokers,
+* $\beta_2$ is the average difference in alcohol use for sporty people relative to non-sporty people, and
+* the $\epsilon_i$'s are assumed to be *independent* across $i$ and follow a normal distribution $N(0,\sigma^2)$.
+
+### Fit OLS
+
+```{r}
+y <- alcohol[,2]
+ans.ols <- lm(y ~ smoke+sport)
+summary(ans.ols)
+```
+
+#### Question
+
+What conclusions can you draw from the ANOVA table of the OLS regression
+regarding the regressors smoke and sport?
+
+> Smokers have on average a 1.4 higher score on drinking and the coefficient is significantly different from 0 at the 1%-level (and more). There is no evidence of sporty people drinking more or less than less sporty people as the coefficient is not significantly different from 0.
+
+### Residuals
+
+We assumed that the errors were normally distributed so the residuals
+
+$$
+\hat{e}_i= y_i - \hat{y}= y_i - \hat{\beta}M_i^{\top}
+$$
+
+should be normally distributed:
+
+```{r}
+hist(ans.ols$residuals)
+```
+
+> The residuals seem reasonably 'normal'
+
+### Autocorrelation
+
+We are now going to investigate other properties of the model.
+
+For the `sna` package, we need to put all covariates, including the
+constant, in a matrix
+
+$$
+\mathbf{M} = \begin{pmatrix}
+M_{1}\\
+M_{2}\\
+\vdots\\
+M_{n}\\
+\end{pmatrix}= \begin{pmatrix}
+1 & m_{1,1} & \cdots & m_{Z,p}\\
+1 & m_{2,1} & \cdots & m_{Z,p}\\
+\vdots & \vdots & \vdots& \vdots\\
+1 & m_{n,1} & \cdots & m_{n,p}\\
+\end{pmatrix}
+$$
+
+We thus put all covariates into the same matrix:
+
+```{r}
+M <- cbind(matrix(1,n,1),smoke,sport)
+colnames(M) <- c('cons','smoke','sport')
+head(M)
+```
+
+Let us investigate whether the residuals are independent across the network. In particular, if the outcome of $i$ is completely independent of the outcome of $j$ then we would not expect there to be a difference between $(\hat{e}_i - \bar{e})(\hat{e}_j-\bar{e})$ for a pair that is connected through a ties $x_{ij}=1$ and a pair
+$(\hat{e}_i - \bar{e})(\hat{e}_k-\bar{e})$ that is not connected, $x_{ik}=0$. In other words, higher (lower) than predicted values should not be expected if a network partner has higher (lower) than predicted value. Note that the average $\bar{e}=0$ by construction and was just included for clarity. Moran's I does measure exactly whether connected partners tend to have more similar residuals than unconnected people. In terms of the outcome variable
+
+$$
+I_k =\frac{n}{\sum_{i=1}^n\sum_{j=1}^n X_{ij}^{(k)}} \frac{\sum_{i=1}^n \sum_{j=1}^n (y_i-\bar{y}) (y_j-\bar{y})X_{ij}^{(k)} }{\sum_{j=1}^n (y_j-\bar{y})^2}
+$$
+
+Where $X_{ij}^{(k)}$ is the $k$-step adjacency matrix, i.e. $X_{ij}^{(1)}$ is the matrix of people that are directly connected, $X_{ij}^{(2)}$ is the matrix of people that are connected at distance 2, etc. The step $k$ is sometimes called *lag*. Intuitively, if $X_{ij}^{(k)}$ doesn't matter, then many cross-product terms should
+cancel others out. It can be shown that, under the assumption that there is no network correlation at lag $k=1$, then the expected value is
+
+$$
+E(I_1) = \frac{-1}{N-1}
+$$
+
+Here we want to check if this seems to hold true for our residuals - are they uncorrelated across network partners?
+
+```{r}
+nacf(X,ans.ols$residuals,type="moran")
+# nacf(X,ans.ols$residuals,type="geary") # Geary's C is another measure of autocorrelation but is harder to undertand
+```
+
+That $I_0=1$ is because this is the correlation of residuals with themselves!
+
+We are only really interested in shorter lags, so let us plot the first 4 and add a reference line for $E(I_1)$ under no correlation
+
+```{r}
+plot(nacf(X,ans.ols$residuals,type="moran")[1:4],type='b')
+abline(h=-1/(n-1),col='red')
+```
+
+### Row-nomalise
+
+When modelling social influence we may want scale the network ties to take into account how many ties people have. Leenders (2002) [@leenders2002modeling] propose a number of ways in which we can scale the adjacency matrix. Here we create a **weight matrix** 
+
+$$
+\mathbf{W} = \begin{bmatrix}
+W_{11} & W_{12} & \cdots & W_{1n}\\
+W_{21} & W_{22} & \cdots & W_{2n}\\
+\vdots & \vdots & \ddots & \vdots\\
+W_{n1} & W_{n2} & \cdots & W_{nn}\\
+\end{bmatrix}
+$$
+
+We want each arc to have the weight
+
+$$
+W_{ij} = X_{ij}/d_{i,out}
+$$
+
+We can do this easily BUT we have to be careful so that we do not divide by 0 (we define $0/0$ as $0$)
+
+```{r}
+degrees <- degree(X,outdegree)
+W <- X
+W[degrees>0,] <- X[degrees>0,]/degrees[degrees>0]
+
+# You can check that we are actually normalising correctly
+# Wcopy <- X
+# for (i in c(1:n))
+# {
+#  if (degrees[i]>0)
+#  {
+#    Wcopy[i,] <- X[i,]/degrees[i]
+#  }
+#  
+#}
+#sum( W != Wcopy)
+```
+
+### Check residulas again
+
+Check the residuals again
+
+```{r}
+plot(nacf(W,ans.ols$residuals,type="moran")[1:4],type='b')
+```
+
+Do we see any difference? In the formula for $I_k$ the scaling factors $d_i$ will actually cancel out.
+
+## Network autocorrelation model
+
+The *network autocorrelation* model, or *network disturbances* model [@marsden1993network], looks exactly like the OLS
+$$
+y_i = M_i \beta + \epsilon_i\text{,}
+$$
+
+but we no longer assume that the residuals are *independent*. Instead, we induce network autoocorrelation on the error terms
+
+$$
+\epsilon_i = \rho \sum_{j=1}^n W_{ij}\epsilon_j+\xi_i
+$$
+
+($\xi$ is the Greek letter Xi -
+[https://en.wikipedia.org/wiki/Xi\_(letter)](https://en.wikipedia.org/wiki/Xi_(letter)){.uri}).
+The error tems $\xi_i$ are assumed to be independent and identically distributed $\xi_i \thicksim N(0,\sigma^2)$. The interpretation is that if $i$ has a higher than predicted value on the outcome variable then $j$ is more likely to *also* have higher than predicted values for all $j$ that $i$ has nominated.
+
+If you know a bit of matrix algebra, you will notice that we can write the vector of disturbances $\epsilon =(\epsilon_1,\ldots,\epsilon_n)^{\top}$ as
+
+$$
+\epsilon = \rho \mathbf{W} \epsilon + \xi
+$$
+
+
+One immediate issue here is that we have $\epsilon$ on both sides of the equation. We can simplify this expression by solving for $\epsilon$
+
+$$
+\epsilon = (I-\rho \mathbf{W})^{-1}\xi
+$$
+
+You can interpret this as the error terms $\xi_i$ 'spreading' on the network.
+
+### Fit network autocorrelation model
+
+The function `lnam` (which stands for linear network autocorrelatio models, pressumably) can fit this model. The formula is specified in terms of the outcome `y` variable and the matrix `x` of covariates. The weight matrix is specified as `W2`.
+
+```{r}
+netacm.1 <-lnam(y=y, x=M, W2=X)
+summary(netacm.1)
+```
+
+Did the conclusions about the regressors smoke and sport change?
+
+> The difference between smokers and non-smokers remain but the effect is somewhat smaller.
+
+Is there evidence of network autocorrelation?
+
+> The network autocorrelation (must be) $\rho$ is here rho2.1 and is estimated to 0.16 and is statistically significantly different from zero on the 5%-level using a one-sided test.
+
+Looking at the network plot, it almost looks as if high-degree nodes drink more. To take this into account, we add outdegree as an explanatory variable:
+
+```{r}
+M <- cbind(matrix(1,n,1),degrees,smoke,sport )
+colnames(M) <- c('cons','degree','smoke','sport')
+head(M)
+```
+
+Now re-run the network autocorrlation model (call the output `netacm.2` to align with the code in the code chunk below)
+
+```{r}
+netacm.2 <-lnam(y=y, x=M, W2=W)
+summary(netacm.2)
+```
+
+Does accounting for outdegree change the conclusions about network autocorrelation?
+
+> No, the coefficient for degree itselft is not statistically significantly different from 0. The magnitude of the network autocorrelation paramter is increased substantially.
+
+### Network Effects model
+
+The *network effects* model assumes that there is *correlation through the outcome variable* $\mathbf{Y}$. This subtly different from correlation only through the error term. The outcome $Y_i$ for $i$ is a a weighted sum of the values $Y_j$ of the contacts of $i$
+
+$$
+Y_i = \rho \sum_{j=1}^n W_{ij}Y_i + M_i\beta+\epsilon_i
+$$
+
+where $\xi_i \thicksim N(0,\sigma^2)$ independently for all $i$.
+
+> If you want to model social influence or social contagion, the network effects model is more approprate than the autocorrelation model as the former models the dependence between values on the outcome varaible
+
+The equation for the full outcome vector can, as before, be written compactly as
+
+$$
+\mathbf{Y} = \rho \mathbf{W} \mathbf{Y} + \mathbf{M}\beta+\epsilon
+$$
+
+Here it is there is *feedback* on the outcome variable.
+
+### Stationary distribution
+
+We can derive this model out of a longitudinal model
+
+$$
+Y_{i,t} = \rho \sum_{j=1}^n W_{ij}Y_{j,t-1}+\mathbf{M}\beta+\epsilon_{i,t}
+$$
+
+as $t$ tends to infinity.
+
+For a quick illustration, let us look at the first 5 interaction of the updating accourding to the longitudinal form of the model
+
+```{r}
+
+rho <- 0.4# set a strong influence paramter
+beta <- matrix(summary(netacm.2)$beta[,1],4,1)# use the estimated coefficients from the last regression
+Y <- matrix(rnorm(n),n,1)# random starting point
+par(mfrow=c(2,3), oma = c(0,1,0,0) + 0.1,mar = c(1,0,1,1) + 0.1)
+coord <- gplot(X,gmode='graph',vertex.cex = Y/2,main= paste('M ',round(nacf(W,Y[,1],type="moran")[2],3) ) )
+for (k in c(1:5)){
+Y <- rho * W %*% Y + M %*% beta + matrix(rnorm(n),n,1)# update according to equation; %*% for matrix multiplication
+gplot(X,gmode='graph',vertex.cex = Y/2, coord=coord, main= paste('M ',round(nacf(W,Y[,1],type="moran")[2],3) ) )
+}
+```
+
+We may or may not see increased correlation in the outcomes. Running 100 iterations this will become a little more evident
+
+```{r}
+moran <- matrix(0,100,3)
+rho <- .4
+Y <- matrix(rnorm(n),n,1)
+for (k in c(1:100)){
+Y <- rho * W %*% Y + M %*% beta + matrix(rnorm(n),n,1)
+moran[k,] <- nacf(W,Y[,1],type="moran")[2:4]}
+par(mfrow=c(1,1))
+plot(moran[,1],type='l')
+lines(moran[,2],col='red')
+lines(moran[,3],col='blue')
+abline( h = -1/(n-1), col='grey')
+```
+
+We might see a slight trend upwards and correlations are generally speaking positive.
+
+As before $Y$ on both sides of the equation, but we can solve for $Y$
+
+$$
+\mathbf{Y} = (I- \rho \mathbf{W})^{-1}(\mathbf{M}\beta+\epsilon)
+$$
+
+
+The same function as before, `lnam` is used to fit this model. The difference from the network autocorrelation model is that the weight matrix is specified as `W1` *not* `W2`.
+
+```{r}
+neteff.2 <-lnam(y=y, x=M, W1=W)
+summary(neteff.2)
+```
+
+> There is no evidence for social influence on alcohol
+
+## Simplify model
+
+Fit a regression that only includes (the intercept) smoke and that uses the original, non-normalised, adjacency matrix
+
+```{r}
+
+neteff.2 <-lnam(y=y, x=M[,c(1,3)], W1=X)
+summary(neteff.2)
+
+```
+
+#### Question
+
+What do you conclude from the results? Can you relate this to total and average exposure in the diffusion model?
+
+> When the the matrix is not row-normlised there is evidence of social influence. This means that it is the number of people that exert influence on you and not the proportion of friends.
+
+
+# References

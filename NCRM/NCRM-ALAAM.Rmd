@@ -1,0 +1,700 @@
+---
+title: "Tutorial on ALAAM - NCRM"
+author: "[Johan Koskinen](https://https://www.su.se/english/profiles/kosk-1.615440)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+editor_options: 
+  markdown: 
+    wrap: 72
+bibliography: references.bib
+---
+```{r, include = FALSE}
+xfun::download_file("https://raw.githubusercontent.com/johankoskinen/CHDH-SNA/main/Markdowns/references.bib")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This tutorial introduces aspects of the Bayesian estimation for auto-logistic actor attribute models (ALAAMs)(@robins2001network, @daraganovaThesis, and @daraganova2013autologistic) developed in @koskinen2020bayesian. 
+
+## Preamble for ALAAM
+
+The main functions are defined in `balaam' which can be "loaded" from GitHub.
+
+## Load program
+
+```{r}
+source("https://raw.githubusercontent.com/johankoskinen/ALAAM/main/balaam.R")
+```
+
+## Manual
+
+A (proto-) manual is avaialble on GitHub [alaam_effects](https://github.com/johankoskinen/ALAAM/blob/main/alaam_effects.pdf).
+
+## Dependencies
+
+There are a number of dependencies in the functions but RStudio should prompt you to install of the following if you have not.
+
+```{r}
+require(MASS)
+require('mvtnorm')
+require('coda')
+```
+
+## Network packages
+
+In particular, we will use `r 'sna'` [@buttsSNA] and `r 'network'` [@buttsNETWORK]
+
+```{r}
+require(sna)
+require(network)
+```
+
+## Load data
+
+We are looking at the s50 dataset, which is further described here:
+<https://www.stats.ox.ac.uk/~snijders/siena/s50_data.htm>
+
+This dataset is available in ziped format online.
+
+```{r}
+temp <- tempfile()
+download.file("https://www.stats.ox.ac.uk/~snijders/siena/s50_data.zip",temp)
+adj <- as.matrix( read.table(unz(temp, "s50-network1.dat")) )
+sport <- read.table(unz(temp, "s50-sport.dat"))
+smoke <- read.table(unz(temp, "s50-smoke.dat"))
+alcohol <- read.table(unz(temp, "s50-alcohol.dat"))
+unlink(temp)
+```
+
+## Format data
+
+```{r symmetrise}
+n <- nrow(adj)
+adj <- as.matrix(adj) # convert from data.frame to matrix
+smoke <- smoke[,2] # use wave 2
+smoke[smoke<2] <- 0 # set non-smoker to 0
+smoke[smoke>0] <- 1 # set occasional and regular to 1
+sport <- sport-1
+```
+
+### Format for estimate.alaam()
+
+The main estimation function `estimate.alaam` requires data to be in `data.frame` format (check `alaam_effects.pdf`)
+
+```{r}
+my.data <- data.frame(smoke=smoke, alcohol=alcohol[,1],sport=sport[,1])
+```
+
+Check data
+
+```{r}
+head(my.data)
+```
+
+### Descriptives
+
+We might want to check what the association are like, for example with alcohol
+
+```{r}
+table(my.data$smoke,my.data$alcohol)
+```
+
+and with outdegree
+
+```{r}
+boxplot(degree( adj , cmode = "outdegree") ~ my.data$smoke)
+```
+
+
+
+
+# Autologistic actor-attribute model
+
+The social influence model developed by @robins2001network and later elaborated by @daraganovaThesis and @daraganova2013autologistic and now refered to as the autologistic actor-attribute model (ALAAM), is a model for binary nodal attributes $\boldsymbol{y}= \{Y_i:1 \leq i \leq n \}$, conditional on a network adjacency matrix $\mathbf{X} = \{ X_{ij}: (i,j)\in V \times V  \}$.
+$$
+p_{\boldsymbol{\theta}}(\boldsymbol{y} | \mathbf{X} ) = \exp \left\{ \boldsymbol{\theta}^{\top} \boldsymbol{z}(\boldsymbol{y},\mathbf{X}) - \psi(\boldsymbol{\theta}; \mathbf{X}) \right\}
+$$ 
+Here $\boldsymbol{z}(\boldsymbol{y},\mathbf{X})$ is a $p\times 1$ vector of statistics calculated for the the dependent variable $y$ and the network $x$.
+
+This part of the tutorial takes you through the Bayesian inference scheme of @koskinen2020bayesian.
+
+## Target of inference
+
+The aim of the MCMC of @koskinen2020bayesian, is to draw samples from and thereby approximate the posterior distribution
+$$
+\pi(\boldsymbol{\theta} | \boldsymbol{y},\mathbf{X}) \propto p_{\boldsymbol{\theta}}(\boldsymbol{y} | \mathbf{X} ) \pi(\boldsymbol{\theta}) = \exp \left\{ \boldsymbol{\theta}^{\top} \boldsymbol{z}(\boldsymbol{y},\mathbf{X}) - \psi(\boldsymbol{\theta}; \mathbf{X}) \right\} \pi(\boldsymbol{\theta} ){\text{,}}
+$$ 
+where $\pi(\boldsymbol{\theta} )$ is the prior distribution of the parameters. We need to use MCMC because the normalising constant of $\pi(\boldsymbol{\theta} | \boldsymbol{y},\mathbf{X})$ is not analytically tractable (nor is the normalising constant of the model, $\psi(\boldsymbol{\theta}; \mathbf{X}) $).
+
+## Specifying a model
+
+Like for the function `lm`, and `glm`, the intuition of the formula is that the LHS is some transformation of the RHS. For ALAAM, we can think of the model specification in terms of the conditional logits
+
+$$
+{\rm{logit}}\left[ \Pr(Y_i = 1 \mid \boldsymbol{y}_{-i},\boldsymbol{\theta}) \right]=\boldsymbol{\theta}^{\top}\boldsymbol{\omega}_i(\boldsymbol{y},\mathbf{X})=\theta_1\omega_{1i}(\boldsymbol{y},\mathbf{X})+\cdots +\theta_p\omega_{pi}(\boldsymbol{y},\mathbf{X})
+$$
+for the change statistics
+
+$$
+\omega_{ji}(\boldsymbol{y},\mathbf{X})=z_j(\Delta_i^+\boldsymbol{y},\mathbf{X})-z_j(\Delta_i^-\boldsymbol{y},\mathbf{X})
+$$
+are the differences in statistics evaluated on $\boldsymbol{y}$ when the variable $Y_i$ is forced to be $y_i=1$,  for $\Delta_i^+\boldsymbol{y}$, and forced to be $y_i=0$,  for $\Delta_i^-\boldsymbol{y}$.
+
+In other words we can think of
+
+```{r}
+y ~ z1+z2+...+zp
+```
+
+as stating that the LHS (`y`) should be the conditional logit, and the RHS be the "linear predictor".
+
+## Types of effects
+
+As further described in `alaam.terms` (`alaam_effects.pdf`), there are *four* classes of effects:
+
+1. Covariate effects
+2. Network metrics
+3. Contagion effects
+4. Interactions of monadic covariates and congation effects
+
+### Covariate effects
+
+The effect of a covariate `x` on a dichotomous outcome variable `y` is specified as a standard formula
+
+```{r}
+y ~ x
+```
+
+Any additional effect of an additional mondatic covariate `z` is added `+z`, e.g.
+
+```{r}
+y ~ x + z
+```
+
+To include an interaction of two monadic covariates, the interaction symbol `*` is used
+
+```{r}
+y ~ x + z + x*z
+```
+
+> The following standard formulae functions are not supported:
+
+```{r}
+y ~ x + I(x^2)# create the squared term manually and add it to data frame instead
+y ~ x + I(x>0)# create the indicator term manually and add it to data frame instead
+y ~ -1 +x # the intercept term cannot be removed
+```
+
+
+### Network effects
+
+It is natural to include network metrics in your model. You are free to precalculate any network measures that you find useful and add them as monadic covariates. For example, you may want to add the effect of betweeness centrality or closeness centrality, `clc <- closeness(adj)` to your model, in which case you add `clc` to the data frame.
+
+Some of network statistics that can be dervived from the **network activity** dependency assumption (Section 3.1.1 Network activity dependence, and also **Indirect Structural Influence**, @koskinen2020bayesian) are available as built in effects. For example, for a directed network, you can specify the effect of sending ties on the outcome `y` as
+
+```{r}
+y ~ odegree
+```
+
+The effects that are available from formula are:
+
+| Effect name | Formula | Description |
+|:-------------:|:---------------------:|:---------------------|
+| `degree` |  $y_ix_{i\cdot}=y_i\sum_j x_{ij}$ | For undirected networks, this measures the association of degree centrality and the probability of success|
+| `idegree` |  $y_ix_{\cdot i}=y_i\sum_j x_{ji}$  |  For directed networks, this measures the association of in-degree centrality and the probability of success|
+| `odegree` |  $y_ix_{i\cdot}=y_i\sum_j x_{ij}$ |  For directed networks, this measures the association of out-degree centrality and the probability of success|
+| `recipties` |  $y_i\sum_j x_{ij}x_{ji}$ |  For directed networks, this measures the association of out-degree centrality and the probability of success|
+| `twostar` |  $y_i {\binom{x_{i\cdot}}{2}}$ |  For undirected networks, the effect of centrality over and above degree|
+| `intwostar` |  $y_i\binom{x_{\cdot i}}{2}$  |  For directed networks, the effect of indegree centrality over and above indegree|
+| `outtwostar` |  $y_i\binom{x_{i\cdot}}{2}$  |  For directed networks, the effect of outdegree centrality over and above outdegree|
+| `threestars` |  $y_i\binom{x_{i\cdot}}{3}$  |  For undirected networks, the effect of degree centrality over and above twostars|
+| `twopath` |  $y_i(x_{\cdot i}x_{i\cdot}-\sum_j x_{ij}x_{ji})$  |  For directed networks, the association of brokerage on the probability of success.|
+| `inthreestar` |  $y_i\binom{x_{\cdot i}}{3}$  |  For directed networks, the effect of indegree centrality over and above intwostars|
+| `outthreestar` |  $y_i\binom{x_{i\cdot}}{3}$ |  For directed networks, the effect of outdegree centrality over and above outtwostars|
+| `transties` |  $y_i\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$  |  For (directed) undirected networks, the effect on probability of success of being embedded in (transitive) triads|
+| `indirties ` | $y_i\sum_j x_{ij} \sum_{k}(1-x_{ik})x_{jk}$ | For (directed) undirected networks, the effect on probability of success of having ties to people that have ties to many people you are not directly tied to (see 3.1.3 Indirect network and contagion dependencies, Koskinen and Daraganova, for details)|
+
+### Contagion effects
+
+Contagion effects are parameters of statistics that capture dependence among outcomes. These can be interpreted in terms of conditional distributions, for example for "simple" or "direct contagtion"
+$$
+{\rm{logit}}\left[\Pr(Y_i = 1 \mid \boldsymbol{y}_{-i},\boldsymbol{\theta})\right]=\theta_{DC}\sum_{j\neq i}y_jx_{ij}+c.
+$$
+
+At the moment, the contagion effects that are implemented are:
+
+| Effect name | Formula | Description |
+|:-------------:|:---------------------:|:---------------------|
+| `simple` | $\sum_{i,j}y_iy_jx_{ij}$  | is the probability of success increased by being connected to actors whose outcome is a success  | 
+| `recip` |  $\sum_{i,j}y_iy_jx_{ij}x_{ji}$   |  is the probability of success increased by being **mutually** tied to actors whose outcome is a success (directed networks only)  | 
+| `indirect` | $\sum_{i}y_i\sum_{j}x_{ij}\sum_{k\neq i,j}y_kx_{jk}$   |  is the probability of success increased by being indirectly connected to actors whose outcome is a success (see 3.1.3 Indirect network and contagion dependencies, Koskinen and Daraganova, for details))  | 
+| `closedind` |  $\sum_{i}y_i\sum_{j}x_{ij}\sum_{k\neq i,j}y_kx_{ik}x_{jk}$   | is the probability of success increased by being both indirectly and directly connected to actors whose outcome is a success (see 3.1.3 Indirect network and contagion dependencies as well as supplementary material, Koskinen and Daraganova, for details))  | 
+| `transitive` |  $\sum_{i}y_i\sum_{j}x_{ij}y_{j}\sum_{k\neq i,j}y_kx_{ik}x_{jk}$   |  is the probability of success increased by being embedded in triads where the two other members have success on the outcome(see 3.1.3 Indirect network and contagion dependencies as well as supplementary material, Koskinen and Daraganova, for details))  | 
+
+# Estimation examples
+
+We will now illustrate two minimal examples of estimating models.
+
+## Markov models
+
+For a Markov model [@robins2001network], the sufficient statistics are, degrees $x_{i\cdot}=\sum_j x_{ij}$, two-stars $\binom{x_{i\cdot}}{2}$, three-stars $\binom{x_{i\cdot}}{3}$, and triangles $\sum_{j,k \neq i}x_{ij}x_{ik}x_{jk}$. These could be be pre-calculated and used as monadic covariates but we will draw on the functionality of `balaam`.
+
+### Independent outcomes
+
+Assume a model for `smoke`, where we include the effects
+
+* The effect of alcohol consumption on the probability of smoking
+* The effect of doing sports on the probability of smoking
+* The effect of nominating many friends on the probability of smoking
+* The effect of being nominated by many as a friend on the probability of smoking
+
+```{r}
+res.0 <- estimate.alaam(smoke ~idegree+odegree+alcohol+sport, my.data, adjacency=adj,
+                           Iterations=1000)
+```
+
+> Taking the ANOVA table at face value, only alcohol has a clear non-zero parameter and effect on smoking, judging by the size of the standard deviation relative to the mean paramter.
+
+### Direct contagion
+
+Assume that in addition to the effects in the independent model, we also want to account for *social influence* by including a direct contagion effect. The effect name for this is `simple`.
+
+
+```{r}
+res.DC.0 <- estimate.alaam(smoke ~idegree+odegree+alcohol+sport+simple, my.data, adjacency=adj,
+                           Iterations=1000)
+```
+
+> Taking the ANOVA table at face value, now it seems only the contagion parameter is clearly non-zero, judging by the size of the standard deviation relative to the mean paramter.
+
+## Posterior quantities
+
+The output gives us an ANOVA-like table with posterior means and standard deviations. We can also get this table from the estimation object
+
+```{r}
+res.0$ResTab 
+```
+
+and a more detailed results table using
+
+```{r}
+write.res.table(res.0,burnin=1,thin=1)
+```
+
+If we were to create a 95% Credibility interval for the parameter of `alcohol`, this would not include 0. The parameter is positive with high posterior probability.
+
+### Explaining the summaries
+
+The summaries in the table are simply summary statistics for the full $p$-dimensional posterior. For example, 
+
+```{r}
+mean(res.0$Thetas[,1])
+sd(res.0$Thetas[,1])
+```
+
+The full distribution can be plotted manually
+
+```{r}
+hist(res.0$Thetas[,1])
+```
+
+And bivariate plots can also be made manually
+
+```{r}
+plot(res.0$Thetas[,c('idegree')],res.0$Thetas[,c('odegree')])
+```
+
+### Graphing posteriors
+
+In `balaam` the function `plotPost`, produces histograms, trace plots, and autocorrelation plots for all parameters in your model.
+
+```{r}
+plotPost(res.0,figname='markov 0',showplot=TRUE)
+```
+
+> We see that the posterior distribution for `alcohol` is concentrated to the right of 0.
+
+# MCMC performance
+
+## Explaining MCMC
+
+The MCMC algortihm generates a sequence
+
+$$
+\boldsymbol{\theta}_0,\boldsymbol{\theta}_1,\ldots,\boldsymbol{\theta}_T
+$$
+
+of $T$ paramter draws from the posterior $\pi(\boldsymbol{\theta} \mid \mathbf{y})$. The draws are made by proposing a new value $\boldsymbol{\theta}^{\ast}$ given a current value $\boldsymbol{\theta}_t$ in iteration $t$
+$$
+\boldsymbol{\theta}^{\ast} \mid \boldsymbol{\theta}_t \thicksim \mathcal{N}_p( \boldsymbol{\theta}_t , \boldsymbol{\Sigma}).
+$$
+
+This new value is either accepted, and $\boldsymbol{\theta}_{t+1}$ is set to $\boldsymbol{\theta}^{\ast}$, or rejected, in which case $\boldsymbol{\theta}_{t+1}$ is set to $\boldsymbol{\theta}_{t}$.
+
+### Trace plots
+
+We can plot the sequence of updates $\boldsymbol{\theta}_0,\ldots,\boldsymbol{\theta}_T$, to get a sense of whether updates are large or small, and if many or few proposed values $\boldsymbol{\theta}^{\ast}$ are accepted
+
+```{r}
+plot( ts( res.0$Thetas) )
+```
+What we are looking for in the trace plots are
+
+1. Is there too much dependence on the initial value $\boldsymbol{\theta}_0$ - is there a trend?
+2. Are the changes too small?
+3. Are too many/few updates accepted
+
+
+## Diagnosing MCMC
+
+### Initial values
+
+The default is to set $\boldsymbol{\theta}_0$ to the maximum likelihood estimate (MLE) for an independent model. These starting values should be sufficiently good for most models. We can however look at the contagion parameter for the DC model, for which the parameter is intialised in $\theta_{DC}=0$
+
+
+```{r}
+plot( ts( res.DC.0$Thetas[,2]), ylab=colnames(res.DC.0$Thetas)[2], xlab='Iteration' )
+lines( cumsum(res.DC.0$Thetas[,2])/c(1:1000), col='red')
+```
+> There is somehing of an increasing trend
+
+### Autocorrelation
+
+Since the MCMC is iterative, the chains could 
+
+* could stay in one place for a number of iterations, or
+* make very small updates, if  $\boldsymbol{\theta}^{\ast}$ are close to $\boldsymbol{\theta}_t$
+
+This would mean that values $\boldsymbol{\theta}_{t}$ and $\boldsymbol{\theta}_{s}$, for iterations $s$ and $t$ that are close to each other, are likely to be more similar, more correlated, than for iterations $s$ and $t$ that are far appart. This is the first sources of *serial autocorrelation* in the chains. The second source, relates to how big jumps we propose, i.e. how close is $\boldsymbol{\theta}^{\ast}$  to the current value $\boldsymbol{\theta}_t$ in iteration $t$? If we make too small jumps, values or iterations $s$ and $t$ that are close to each other will be highly correlated.
+
+A perfect sampler would propose and accept $\boldsymbol{\theta}^{\ast}$ regadeless of where we currently are in iteration $t$. If this were the case, then the effective sammple size would be equal to the total number of iterations. As a ficticious example, consider drawing 100 normal variates
+
+```{r normaldraws}
+# WHITE NOISE
+theta.hypothetical <- rnorm(100, mean =1, sd=1.5)
+par( mfrow= c(1,2) )
+plot(theta.hypothetical,type='l')
+hist(theta.hypothetical)
+abline(v=1)
+```
+
+The draws here randomly fluctuate areound the mean (1.5), and if we project the draws to a histogram, this gives us the sample from our target distribution.
+
+For ALAAM posteriors we have three ways of checking the autocorrelation.
+
+#### SACF
+
+The results table provide the sample autocorrelation between draws $\boldsymbol{\theta}_{t}$ and $\boldsymbol{\theta}_{t+k}$, for lags $k=10$ and $k=30$.
+
+```{r}
+res.DC.0$ResTab
+```
+
+#### plotPost
+
+The plotting function gives us the correlations for all lags.
+
+#### ACF plot
+
+We can use the standard function `acf`, for example for the contagion parameter
+
+```{r}
+acf( res.DC.0$Thetas[,2] )
+```
+We can compare this with the white noise, where we have 100 *independent draws*.
+
+```{r sacfnorm}
+acf(theta.hypothetical)
+as.numeric(acf(theta.hypothetical,plot=FALSE)[c(5,10)][[1]])
+```
+
+> With high autocorrelation we need more iterations to get a "representative" sample from the posterior
+
+Intuitively, with high autocorrelation
+
+> Your posterior will look very different depending on what subset of iterations you look at!
+
+**NOTE** The log-run behaviout of the Monte carlo mean
+$$
+\bar{\boldsymbol{\theta}}=\frac{1}{T}\sum_{t=0}^T\boldsymbol{\theta}_t
+$$
+
+will not be affected by high autocorrelation. The long-run behaviour (and quality) of the Monte Carlo estimate of the variance-covariance matrix
+$$
+\bar{V}(\boldsymbol{\theta})=\frac{1}{T}\sum_{t=0}^T\boldsymbol{\theta}_t\boldsymbol{\theta}_t^{\top}-\bar{\boldsymbol{\theta}}\bar{\boldsymbol{\theta}}^{
+\top}
+$$
+
+and posterior credibility intervals will be (potentially) severely affected.
+
+
+#### ESS
+
+The *effective sample size* (ESS), is an estimate of how many independent draws that you have in your draws. For the white noise, we have 100 *independent draws*. The effective (independent) sample size is equal to the number of draws. 
+
+```{r essnorm}
+effectiveSize(theta.hypothetical)
+```
+
+For the DC model, we did 1000 iteration and the reported ESS was around 30 for most parameters. This means that we need to do roughly
+
+```{r}
+1000/30
+```
+
+updates in the MCMC for every approximately independent draw.
+
+# Improving MCMC
+
+1. To reduce dependence on the initial value, we can start in a better $\boldsymbol{\theta}_0$
+2. To reduce SACF, we can "space out" our sample by only using every $k$th iteration - `thinning`
+3. To reduce SACF, we can optimise how large updates $\boldsymbol{\theta}^{\ast}$ we do to $\boldsymbol{\theta}_t$, by calibrating $\boldsymbol{\Sigma}$ in the proposal distribution.
+
+## Using prevBayes
+
+We can continue the estimation where the previous estimation finished using `prevBayes`. We can also set `par.burnin` and `thinning` to reduce the SACF. With 10100 iterations, burning of 100, and thinning or 10, we will get a total sample size of (5100-100)/10=500.
+
+```{r}
+# Previous call for reference
+#res.DC.0 <- estimate.alaam(smoke ~idegree+odegree+alcohol+sport+simple, my.data, adjacency=adj,
+#                           Iterations=1000)
+res.DC.1 <- estimate.alaam(smoke ~idegree+odegree+alcohol+sport+simple, my.data, adjacency=adj,
+                           Iterations=5100,
+                        prevBayes=res.DC.0,# our first estimation
+                        par.burnin=100,# discard the first 100 iterations
+                        thinning=10)# only use every 
+```
+
+> Draws 10 iterations apart are now very close to independent, judging by the SACF. ESS are close to 100.
+
+The figures look promising but the proportion of accepted proposals (acceptance ratio) is high. This suggests that chains might be making too small moves. Check trace plots
+
+```{r}
+plot( ts( res.DC.1$Thetas ))
+```
+
+
+## Calibrate proposal
+
+If we set `recalibrate` equal to TRUE, we will estimate $\hat{\boldsymbol{\Sigma}}=V(\boldsymbol{\theta} \mid \boldsymbol{y})$, and propose moves from
+$$
+\boldsymbol{\theta}^{\ast} \mid \boldsymbol{\theta}_t \thicksim \mathcal{N}_p( \boldsymbol{\theta}_t , \tfrac{c}{\sqrt{p}}\hat{\boldsymbol{\Sigma}})
+$$
+The tuning constant $c$ is given by the argument `scaling`.
+
+```{r}
+res.DC.2 <- estimate.alaam(smoke ~idegree+odegree+alcohol+sport+simple, my.data, adjacency=adj,
+                           Iterations=5100,
+                           prevBayes=res.DC.0,# our first estimation
+                           par.burnin=100,# discard the first 100 iterations
+                           thinning=10,# only use every 10
+                           recalibrate=TRUE,# use proposal variance from previous posterior
+                           scaling = 0.75)# scale down
+```
+
+```{r}
+plot( ts( res.DC.2$Thetas ))
+```
+
+> Chains seem to make big moves but very few proposals are accepted.
+
+Possible remedies include
+1. Reduce scaling
+2. Buy mixing by increasing iterations and thinning
+3. Recalibrate yet another time
+
+# What is a good ESS
+
+That the chains are not trending and that autocorrelation is not too high more imporant that a single number. Conceptually, if you have an ESS of, say, 10, then you will only have precision down to the first decimal. With ESS of 1000, you can have precision down to maybe the second or third decimal.
+
+# More on the algoritm
+
+When determining whether to accept $\boldsymbol{\theta}^{\ast}$, a replicate dataset  $\boldsymbol{y}^{\ast}$, is drawn from the model
+$$
+\boldsymbol{y}^{\ast} \thicksim p_{\boldsymbol{\theta}^{\ast}}(\boldsymbol{y} | \mathbf{X} ) 
+$$
+The parameter $\boldsymbol{\theta}^{\ast}$ is accepted into the posterior is $\boldsymbol{y}^{\ast}$ sufficiently similar to observed data $\boldsymbol{y}$. More specifically, the parameter is accepted with probability
+$$
+\min \left\{1,e^h \right\}
+$$
+where
+$$
+h = (\boldsymbol{\theta}_t-\boldsymbol{\theta}^{\ast})^{\top}(\boldsymbol{z}(\boldsymbol{y}^{\ast},\mathbf{X})-\boldsymbol{z}(\boldsymbol{y},\mathbf{X}))
+$$
+
+We cannot draw $\boldsymbol{y}^{\ast}$ directly from the model, but will have to rely on MCMC. This algorithm is similar to how we generate $\boldsymbol{\theta}$ iteratively, a sequence 
+$$
+\boldsymbol{y}^{\ast}_0,\boldsymbol{y}^{\ast}_1,\ldots,\boldsymbol{y}^{\ast}_M
+$$
+is generated and only the last iteration is used. The number $M$ of iterations we use in order to get one draw, is set by the argument `burnin`. This number should be at least
+$$
+M > 0.25 \times n \times \kappa
+$$
+
+for $\kappa$ greater than 30.
+
+# GOF
+
+To appraise how well the estimate model replicates data, the goodness-of-fit (GOF) procedure simulates replicate data
+$$
+\boldsymbol{y}_t^{(rep)}\thicksim p_{\boldsymbol{\theta}_t}(\boldsymbol{y}^{(rep)} | \mathbf{X} )
+$$
+for the each of the parameter dras $\boldsymbol{\theta}_t$ in our posterior sample. Fit of the replicate data to observed data is then judged by comparing $\boldsymbol{y}_t^{(rep)}$ to $\boldsymbol{y}$ on a number of metrics $S_k:\mathcal{Y}\times\mathcal{X} \rightarrow \mathbb{R}$. The posterior $p$-value is defined as
+$$
+\mathbb{E}[|S_k(\boldsymbol{y}^{(rep)})-\mathbb{E}(S_k(\boldsymbol{y}^{(rep)}))|>|S_k(\boldsymbol{y})-\mathbb{E}(S_k(\boldsymbol{y}^{(rep)}))|]
+$$
+### GOF Statistics
+
+The pre-programmed statistics $S_k$ are
+
+GOF-name | interpretation | statistic
+----- | ----- | -----    
+intercept | intercept |       $\sum y_{i}$
+simple cont.| direct contagion through outgoing ties |     $\sum y_{i}y_{j}x_{i,j}$
+recip cont.  | contagion through reciprochated ties |    $\sum y_{i}y_{j}x_{i,j}x_{j,i}$
+indirect cont. | indirect contagion |  $\sum_{j,k}y_ix_{i,j}x_{j,k}y_k$
+closedind cont. | contaigion in closed triad | $\sum_{j,k}y_ix_{i,j}x_{j,k}x_{i,k}y_k$
+transitive cont.| contagion in transitive triple | $\sum_{j,k}x_{i,j}x_{j,k}x_{i,k}y_iy_jy_k$
+outdegree   | Markov outdegree |     $\sum y_{i}\sum_j x_{i,j}$
+indegree     |  Markov outdegree |   $\sum y_{i}\sum_j x_{j,i}$
+reciprochation | Markov reciprochal ties |  $\sum y_{i}\sum_j x_{i,j}x_{i,j}$
+instar      | Markov in-star | $\sum y_{i} {\binom{\sum_j x_{i,j}}{2}}$    
+outstar     |  Markov out-star | $\sum y_{i} {\binom{\sum_j x_{j,i}}{2}}$     
+twopath    |  Markov mixed star | $\sum y_{i} \sum x_{i,j}x_{i,k}$     
+in3star    |  Markov in-three star | $\sum y_{i} \sum x_{j,i}x_{k,i}x_{h,i}$ 
+out3star    |  Markov out-three star | $\sum y_{i} \sum x_{i,j}x_{i,k}x_{i,h}$ 
+transitive  |  Markov transitive triangle | $\sum y_i \sum_{j,k}x_{i,j}x_{j,k}x_{i,k}$ 
+cyclic      |  Markov cyclic triangle | $\sum y_i \sum_{j,k}x_{i,j}x_{j,k}x_{k,i}$ 
+indirect     |  Markov indirect, non-exclusive ties | $\sum_{j} (x_{i,j} x_{j, +} - x_{i,j}x_{j,i})$ 
+excl.indirect    |  Markov indirect, unique nodes | $\sharp \{ k : x_{ik}=0,\max_j(x_{i,j}x_{j,k})>0 \}$ 
+prop.alc.alter   | a user-defined alter attribute variable | $\frac{1}{1+x_{i,+}} \sum x_{i,j}a_{j}$
+
+## Generate GOF distribution
+
+To generate a sample from the model implied by the independent model
+
+```{r}
+sim.0 <- get.gof.distribution(NumIterations=100, # number of vectors to draw
+                                  res=res.0, # the ALAAM estimation object that contains model and results
+                                  burnin=100, # no. iteractions discarded from GOF distribution
+                                  contagion ='none') # should be the same as for model fitted
+```
+
+# Calculate the statistics
+
+
+```{r}
+gof.table(obs.stats=    sim.0$stats, # observed statistics included  not fitted statistics
+          sim.stats=    sim.0$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec= sim.0$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=FALSE)
+```
+
+> The independent model struggles to replicate the contagion effects
+
+Repeat for the simple contagion model
+
+```{r}
+sim.2 <- get.gof.distribution(NumIterations=100, # number of vectors to draw
+                                  res=res.DC.2, # the ALAAM estimation object that contains model and results
+                              thinning= 2000,# number of iterations to draw y
+                                  burnin=100, # no. iteractions discarded from GOF distribution
+                                  contagion ='simple') # should be the same as for model fitted
+```
+
+```{r}
+gof.table(obs.stats=    sim.2$stats, # observed statistics included  not fitted statistics
+          sim.stats=    sim.2$Sav.gof, # simulated goodness-of-fit statistics
+          name.vec= sim.2$gof.stats.names, # names of statistics calculate, not all will be used if undirected
+          tabname='ALAAMGofalt', # name of file saved
+          pvalues=TRUE, # posterior predictive p-values
+          save.tab ='csv', # save a csv file or a LaTex file
+          directed=FALSE)
+```
+
+> No indications of poor fit
+
+# Model selection
+
+GOF only checks if there are features of data that are not adequately captured by the model. We cannot say **how much** better or worse the GOF for one model is compared to another - either the model fits or it does not (and we do not want to overfit).
+
+To compare models we may quantify the fit of a model, drawing by analogy with standard generalised linear models.
+
+## Posterior deviance
+
+@aitkin2017statistical proposed that a graphical comparison of models can be done through comparing the posterior distribution of the deviance. The deviance is here defined as minus twice the log likelihood
+$$
+D(\boldsymbol{\theta})=-2 \log[p_{\boldsymbol{\theta}}(\boldsymbol{y} | \mathbf{X} )].
+$$
+Calculate the deviance $D(\boldsymbol{\theta}_t)$ for the parameters in your posterior.
+
+> Models with smaller deviance are prefered to models with large deviance
+
+### Independent model
+
+The deviances can be calculated exactly for the independent model
+
+```{r}
+ind.post.dev <- post.deviance.alaam(res.0)
+```
+
+### Contagion model
+
+For the model with contagion, numerical methods are required (see `alaam_effects.pdf`). The arguments are here deliberately set too low to speed up the calculateions.
+
+When evaluating deviance across the posterior draws, we ideally want to have suffiently spaced out and approximately independent draws from the posterior os possible. In the list of arguments ``r 'burnin'`` is the number of parameter draws that are discarded and ``r 'thinning'`` is the number of iterations that are discarded between sample draws. Node that if ``r 'dim(res.1$Thetas)[1]'`` is $N$, then the total number of parameter draws you use will be ``r '(N-burnin)/thinning'``.
+
+Calculating the posterior deviances is done based on path of length ``r 'numbridges'``, linking ``r 'thetaRef'`` with the paramter. The (log) ration of normalising constants is estimated based on a MCMC sample from the model based on ``r 'numYsamps'``. This sample size has to be large but does not have to be too large. The thining in generating these vectors is ``r 'Yburnin'``. The larger this and `r 'numYsamps'`` the better precision you get.
+
+> Evaluating the deviance takes a while - be patient; the routine will print to screen how many paramters you have eveluated the relative deviance for out of the total number
+
+
+```{r}
+my.dev.post <- post.deviance.alaam(res.DC.2,# the estimation object
+                                  numBridges=5,# the safer default is 20
+                                  thinning.like = 1000,# thinning in drawing y; should be higher
+                                  sample.size = 20,# number of y drawn for each bridge
+                                  cov.sample.burnin = NULL,
+                                  printFreq=10,# print to screen after done 10
+                                  mult.fact = 30,# depreciated
+                                  num.outs=100)# number of devaiance evaluations to return
+```
+
+### Visualising deviance
+
+@aitkin2017statistical recomnded comparing the distributions in terms of their cumulative distribution functions
+$$
+\Pr(D(\boldsymbol{\theta})<d ) 
+$$
+
+
+```{r}
+plot.deviance.alaam(dev.1=ind.post.dev, dev.2=my.dev.post)
+```
+> There is separatation between the CDFs
+
+## DIC
+
+The DIC can be calcualted from the posterior deviances using the formula of @spiegelhalter2002bayesian or @gelman2013bayesian. The difference between the two ways of calculating DIC lies in the calculation of $p_D$. Here we use
+$$
+DIC= E[D(\boldsymbol{\theta})]+V(D(\boldsymbol{\theta}))/2
+$$
+Calculate the DIC for the two models using `alaam.dic`
+
+```{r}
+c( alaam.dic(ind.post.dev),alaam.dic(my.dev.post) )
+```
+
+> What model is the winner? Smaller is better
+
+# References
