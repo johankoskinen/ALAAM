@@ -10,7 +10,7 @@ The source `balaam.R` is a collection of different main functions and helper fun
 
 Johan Koskinen - [@drjohankoskinen](https://twitter.com/drjohankoskinen) - johan.koskinen@stat.su.se
 
-Project Link: [https://github.com/johankoskinen/CDHD-SNA](https://github.com/johankoskinen/ALAAM)
+Project Link: [https://github.com/johankoskinen/ALAAM](https://github.com/johankoskinen/ALAAM)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
