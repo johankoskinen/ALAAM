@@ -4967,7 +4967,10 @@ if (length(take.out)==1)
 get.gof.distribution <- function(NumIterations=NULL,res=NULL,burnin=100,thinning= 1000, contagion ='simple',do.loop=FALSE,user.covars=NULL)
 {
   
-  
+  if (any(is.na(res$ALAAMobj$y)))
+  {
+    res$ALAAMobj$y[is.na(res$ALAAMobj$y)] <- 0
+  }
   
   if (contagion == 'none')
   {
