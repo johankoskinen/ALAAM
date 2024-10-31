@@ -2,7 +2,7 @@
 
 This is a collection of routines for Bayesian estimation of the Auto-Logistic Actor-Attribute Model (ALAAM)[[1]](#1)[[2]](#2) as detailed in Koskinen and Daraganova (2022)[[3]](#3).
 
-The source MultivarALAAMalt.R is a collection of different main functions and helper functions
+The source `balaam.R` is a collection of different main functions and helper functions
 <!-- CONTACT -->
 ## Contact
 
