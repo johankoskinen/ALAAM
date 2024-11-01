@@ -5632,7 +5632,11 @@ BayesALAAM.formula <- function(ALAAMobj,Iterations=1000,silent=FALSE,
   require('coda')
   
   ignore.cont <- FALSE
-  
+
+if (!is.null( ALAAMobj$canchange))
+  {
+    ALAAMobj$non.fix <-  ALAAMobj$canchange
+  }
   
   if ('none' %in% ALAAMobj$contagion)
   {
@@ -5699,10 +5703,7 @@ BayesALAAM.formula <- function(ALAAMobj,Iterations=1000,silent=FALSE,
     
   }
   
-  if (!is.null( ALAAMobj$canchange))
-  {
-    ALAAMobj$non.fix <-  ALAAMobj$canchange
-  }
+  
   #if (is.null(canchange))
   #{
   #	tem.obj <- NULL
